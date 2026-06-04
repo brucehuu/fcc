@@ -27,9 +27,6 @@ var version = "dev"
 
 func processIcon(src []byte) []byte {
 	icon := src
-	if removed, ok := tray.RemoveWhiteBackground(icon); ok {
-		icon = removed
-	}
 	if padded, ok := tray.AddIconPadding(icon, 18); ok {
 		icon = padded
 	}

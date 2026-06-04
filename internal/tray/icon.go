@@ -12,7 +12,7 @@ import (
 
 const (
 	iconPath    = "assets/fcc-logo.png"
-	cornerRatio = 22 // % of width used as corner radius — larger for Dock visibility
+	cornerRatio = 23 // % of width used as corner radius — larger for Dock visibility
 )
 
 // loadIcon returns PNG bytes for the menu bar icon. If the user has dropped
