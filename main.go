@@ -22,7 +22,7 @@ import (
 //go:embed assets/fcc-logo.png
 var appIconPNG []byte
 
-const version = "0.1.001"
+const version = "0.0.1"
 
 func processIcon(src []byte) []byte {
 	icon := src
