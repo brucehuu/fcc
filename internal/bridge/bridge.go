@@ -151,7 +151,7 @@ func isOpenCodeCommand(command string) bool {
 //   - npx 启动: npx claude, npx -y codex
 //   - 跳过选项: claude --foo, codex -c foo=bar
 func matchCommand(command, name string) bool {
-	fields := strings.Fields(command)
+	fields := terminal.SplitCommand(command)
 	if len(fields) == 0 {
 		return false
 	}
@@ -799,6 +799,13 @@ func (b *Bridge) RestartTmux(workDir string) error {
 	oldTerm := b.term
 	b.termMu.RUnlock()
 	_ = oldTerm.Kill()
+	// 等待旧 session 完全消失，避免创建同名 session 失败
+	for i := 0; i < 20; i++ {
+		if !oldTerm.HasSession() {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	// 创建新 session
 	tm := terminal.NewTmuxSession("fcc")

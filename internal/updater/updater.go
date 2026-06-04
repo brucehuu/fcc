@@ -221,9 +221,12 @@ func ReplaceBinary(newPath string) error {
 	}
 
 	if err := os.Chmod(exe, 0755); err != nil {
-		// Rollback.
-		_ = os.Rename(exe, newPath)
-		_ = os.Rename(oldPath, exe)
+		// Rollback: copy old binary back to exe (more reliable than rename across filesystems).
+		if data, readErr := os.ReadFile(oldPath); readErr == nil {
+			_ = os.WriteFile(exe, data, 0755)
+		}
+		_ = os.Remove(oldPath)
+		_ = os.Remove(newPath)
 		return fmt.Errorf("chmod new binary: %w", err)
 	}
 

@@ -32,7 +32,7 @@ func (t *TmuxSession) Start(command, workDir string) error {
 		args = append(args, "-c", workDir)
 	}
 	// 把命令字符串拆分为多个参数，支持双引号/单引号包裹的带空格参数
-	cmdParts := splitCommand(command)
+	cmdParts := SplitCommand(command)
 	args = append(args, cmdParts...)
 	cmd := exec.Command("tmux", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -146,8 +146,8 @@ func (t *TmuxSession) Kill() error {
 	return cmd.Run()
 }
 
-// splitCommand 把命令字符串按空格拆分为参数，支持双引号/单引号包裹的带空格参数和反斜杠转义。
-func splitCommand(command string) []string {
+// SplitCommand 把命令字符串按空格拆分为参数，支持双引号/单引号包裹的带空格参数和反斜杠转义。
+func SplitCommand(command string) []string {
 	var args []string
 	var current strings.Builder
 	inQuote := false
@@ -185,6 +185,9 @@ func splitCommand(command string) []string {
 		}
 	}
 
+	if escaped {
+		current.WriteRune('\\')
+	}
 	if current.Len() > 0 || inQuote {
 		args = append(args, current.String())
 	}

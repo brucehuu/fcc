@@ -134,8 +134,8 @@ func main() {
 		// Reload config after setup window closes.
 		cfg, err = config.Load(".env")
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "failed to load config after setup: %v\n", err)
-			os.Exit(1)
+			fmt.Fprintln(os.Stderr, "Config not saved. Run 'fcc' again to set up.")
+			os.Exit(0)
 		}
 	}
 	log.SetLevel(cfg.LogLevel)

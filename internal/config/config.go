@@ -193,7 +193,11 @@ func updateEnvVar(path, key, value string) error {
 		}
 	}
 	if !found {
-		lines = append(lines, prefix+value)
+		if len(lines) == 1 && lines[0] == "" {
+			lines[0] = prefix + value
+		} else {
+			lines = append(lines, prefix+value)
+		}
 	}
 
 	out := strings.Join(lines, "\n")
