@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"feishu-connect/internal/bot"
+	"feishu-connect/internal/config"
 	"feishu-connect/internal/log"
 	"feishu-connect/internal/terminal"
 )
@@ -45,7 +46,8 @@ type BridgeConfig struct {
 type Bridge struct {
 	messenger         Messenger
 	term              Terminal
-	receivers         sync.Map // map[receiverKey]*receiverState
+	termMu            sync.RWMutex // 保护 term 的热替换
+	receivers         sync.Map     // map[receiverKey]*receiverState
 	captureInterval   time.Duration
 	sendTimeout       time.Duration
 	historyLines      int
@@ -67,7 +69,8 @@ type bridgeMetrics struct {
 	diffMisses       atomic.Uint64
 }
 
-func New(cfg *BridgeConfig) (*Bridge, error) {
+// buildCommand 根据配置构建完整的启动命令（追加 bypass 参数、codex queue mode 等）。
+func buildCommand(cfg *BridgeConfig) string {
 	command := cfg.Command
 	// 如果启用了 bypass permissions，追加对应工具的免确认参数
 	if cfg.BypassPermissions {
@@ -76,12 +79,19 @@ func New(cfg *BridgeConfig) (*Bridge, error) {
 		} else if isCodexCommand(command) && !strings.Contains(command, "--dangerously-bypass-approvals-and-sandbox") {
 			command += " --dangerously-bypass-approvals-and-sandbox"
 		}
+		// opencode 目前不支持类似的免确认参数
 	}
 
 	// codex 使用配置的队列模式（默认 guide）
 	if isCodexCommand(command) && !strings.Contains(command, "followUpQueueMode") {
 		command += fmt.Sprintf(` -c desktop.followUpQueueMode=%q`, cfg.CodexQueueMode)
 	}
+
+	return command
+}
+
+func New(cfg *BridgeConfig) (*Bridge, error) {
+	command := buildCommand(cfg)
 
 	b := &Bridge{
 		captureInterval:   cfg.CaptureInterval,
@@ -112,6 +122,10 @@ func isClaudeCommand(command string) bool {
 
 func isCodexCommand(command string) bool {
 	return matchCommand(command, "codex")
+}
+
+func isOpenCodeCommand(command string) bool {
+	return matchCommand(command, "opencode")
 }
 
 // matchCommand 在命令字符串中查找指定的可执行文件名。
@@ -201,7 +215,10 @@ func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 			return
 		}
 		log.Info("[bridge] interrupt signal received, sending Escape to tmux")
-		if err := b.term.SendSpecialKey("Escape"); err != nil {
+		b.termMu.RLock()
+		term := b.term
+		b.termMu.RUnlock()
+		if err := term.SendSpecialKey("Escape"); err != nil {
 			log.Warnf("[bridge] failed to send Escape: %v", err)
 		}
 		return
@@ -209,7 +226,10 @@ func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 
 	b.metrics.messagesReceived.Add(1)
 	log.Debugf("[bridge] sending to tmux: %q", log.Truncate(text, 80))
-	if err := b.term.SendKeys(text); err != nil {
+	b.termMu.RLock()
+	term := b.term
+	b.termMu.RUnlock()
+	if err := term.SendKeys(text); err != nil {
 		log.Warnf("[bridge] failed to send keys: %v", err)
 	}
 }
@@ -272,13 +292,19 @@ func (b *Bridge) Shutdown(ctx context.Context) error {
 
 // WaitReady 阻塞等待底层 tmux session 就绪，供 main 在 attach 前调用
 func (b *Bridge) WaitReady() error {
-	return b.term.WaitReady()
+	b.termMu.RLock()
+	term := b.term
+	b.termMu.RUnlock()
+	return term.WaitReady()
 }
 
 func (b *Bridge) forwardOutput(ctx context.Context) {
 	// 首次 capture 作为 baseline（每个 receiver 独立初始化）
 	// 失败时不初始化，避免下次 diff 发送完整 pane
-	pane, err := b.term.CaptureVisible(b.historyLines)
+	b.termMu.RLock()
+	term := b.term
+	b.termMu.RUnlock()
+	pane, err := term.CaptureVisible(b.historyLines)
 	if err != nil {
 		log.Warnf("[bridge] initial capture failed: %v", err)
 	} else {
@@ -334,7 +360,10 @@ func (b *Bridge) forwardOutput(ctx context.Context) {
 
 func (b *Bridge) captureAndSend(ctx context.Context) bool {
 	b.metrics.captures.Add(1)
-	pane, err := b.term.CaptureVisible(b.historyLines)
+	b.termMu.RLock()
+	term := b.term
+	b.termMu.RUnlock()
+	pane, err := term.CaptureVisible(b.historyLines)
 	if err != nil {
 		log.Warnf("[bridge] capture pane failed: %v", err)
 		return false
@@ -734,6 +763,57 @@ func (b *Bridge) Close() {
 		// 只关闭 bot，保留 tmux session 让用户可以重新 attach
 		b.messenger.Close()
 	})
+}
+
+// RestartTmux 热重启 tmux session：读取最新配置、kill 旧 session、启动新 session、重置 receiver baseline。
+func (b *Bridge) RestartTmux(workDir string) error {
+	cfg, err := config.Reload(".env")
+	if err != nil {
+		return fmt.Errorf("reload config failed: %w", err)
+	}
+
+	command := buildCommand(&BridgeConfig{
+		Command:           cfg.Command,
+		BypassPermissions: cfg.BypassPermissions,
+		CodexQueueMode:    cfg.CodexQueueMode,
+	})
+
+	// 先同步 kill 旧 session，确保同名 session 可被重新创建
+	b.termMu.RLock()
+	oldTerm := b.term
+	b.termMu.RUnlock()
+	_ = oldTerm.Kill()
+
+	// 创建新 session
+	tm := terminal.NewTmuxSession("fcc")
+	if !tm.IsAvailable() {
+		return fmt.Errorf("tmux is not available")
+	}
+	if err := tm.Start(command, workDir); err != nil {
+		return fmt.Errorf("start new tmux session failed: %w", err)
+	}
+
+	b.termMu.Lock()
+	b.term = tm
+	b.termMu.Unlock()
+
+	if err := tm.WaitReady(); err != nil {
+		return fmt.Errorf("new tmux session not ready: %w", err)
+	}
+
+	// 重置所有 receiver 的 baseline，防止新旧 tmux 内容 diff 错误。
+	// lastPane 设为空字符串，下一次 diff 会发送完整 pane 内容。
+	b.receivers.Range(func(k, v interface{}) bool {
+		state := v.(*receiverState)
+		state.mu.Lock()
+		state.lastPane = ""
+		state.ready = true
+		state.mu.Unlock()
+		return true
+	})
+
+	log.Infof("[bridge] tmux restarted with command: %s", command)
+	return nil
 }
 
 // CleanupOldImages 删除超过 maxAge 的本地图片，释放磁盘

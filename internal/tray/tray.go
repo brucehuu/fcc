@@ -11,10 +11,11 @@ import (
 const (
 	menuTitleConfig = "Open Config"
 	menuTitleExit   = "Quit fcc"
-	tooltipText     = "fcc — Feishu Connect for Claude"
+	tooltipText     = "fcc — Feishu Connect"
 )
 
 type Config struct {
+	Version      string
 	OnOpenConfig func()
 	OnExit       func()
 	OnMenuQuit   func()
@@ -39,6 +40,12 @@ func Run(cfg Config) {
 		icon := loadIcon()
 		systray.SetIcon(icon)
 		systray.SetTooltip(tooltipText)
+
+		if cfg.Version != "" {
+			mVersion := systray.AddMenuItem("fcc v"+cfg.Version, "")
+			mVersion.Disable()
+			systray.AddSeparator()
+		}
 
 		mConfig := systray.AddMenuItem(menuTitleConfig, "Open fcc configuration page")
 		systray.AddSeparator()

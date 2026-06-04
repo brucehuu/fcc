@@ -22,7 +22,7 @@ import (
 //go:embed assets/fcc-logo.png
 var appIconPNG []byte
 
-const version = "0.1.0"
+const version = "0.1.001"
 
 func processIcon(src []byte) []byte {
 	icon := src
@@ -187,6 +187,19 @@ func main() {
 	}
 	defer watchdog.RemoveFCCPID()
 
+	// SIGUSR1: 配置页面保存后触发，热重启 tmux
+	reloadCh := make(chan os.Signal, 1)
+	signal.Notify(reloadCh, syscall.SIGUSR1)
+	defer signal.Reset(syscall.SIGUSR1)
+	go func() {
+		for range reloadCh {
+			log.Info("[main] received SIGUSR1, restarting tmux...")
+			if err := b.RestartTmux(workDir); err != nil {
+				log.Errorf("[main] restart tmux failed: %v", err)
+			}
+		}
+	}()
+
 	// tmux attach 必须在子 goroutine 跑 — 主线程要交给 tray.Run 跑 NSApp loop。
 	cmd := exec.Command("tmux", "attach", "-t", "fcc")
 	cmd.Stdin = os.Stdin
@@ -210,6 +223,7 @@ func main() {
 	// cfg.OnExit：通用清理（杀 tmux + cancel），Ctrl+C 和菜单 Quit 都会走这里。
 	// cfg.OnMenuQuit：只在用户点菜单 Quit 时跑，**杀 watchdog**（彻底退出）。
 	tray.Run(tray.Config{
+		Version:      version,
 		OnOpenConfig: tray.OpenConfig,
 		OnExit: func() {
 			log.Info("[main] shutting down...")

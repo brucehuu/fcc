@@ -391,6 +391,7 @@ type mockTerminal struct {
 	mu       sync.Mutex
 }
 
+func (t *mockTerminal) Start(command, workDir string) error { return nil }
 func (t *mockTerminal) SendKeys(text string) error       { return nil }
 func (t *mockTerminal) SendSpecialKey(key string) error  { return nil }
 func (t *mockTerminal) CaptureVisible(historyLines int) (string, error) {

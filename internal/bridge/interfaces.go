@@ -18,6 +18,7 @@ type Messenger interface {
 // Terminal 与终端交互的抽象
 // 实现：internal/terminal.TmuxSession
 type Terminal interface {
+	Start(command, workDir string) error
 	SendKeys(text string) error
 	SendSpecialKey(key string) error
 	CaptureVisible(historyLines int) (string, error)

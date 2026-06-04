@@ -33,7 +33,25 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("failed to load env file: %w", err)
 		}
 	}
+	return parseEnv()
+}
 
+// Reload 强制重新读取 .env 文件并覆盖当前进程的环境变量。
+// 用于热重载场景（配置页面修改后，主进程需要读到最新值）。
+func Reload(path string) (*Config, error) {
+	if path == "" {
+		path = ".env"
+	}
+	if _, err := os.Stat(path); err == nil {
+		if err := godotenv.Overload(path); err != nil {
+			return nil, fmt.Errorf("failed to overload env file: %w", err)
+		}
+	}
+	return parseEnv()
+}
+
+// parseEnv 从当前进程环境变量解析配置。
+func parseEnv() (*Config, error) {
 	appID := os.Getenv("LARK_APP_ID")
 	appSecret := os.Getenv("LARK_APP_SECRET")
 	command := os.Getenv("COMMAND")
@@ -116,4 +134,55 @@ func parseInt(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// UpdateCommand 更新 .env 文件中的 COMMAND 值。
+func UpdateCommand(path, command string) error {
+	if path == "" {
+		path = ".env"
+	}
+	return updateEnvVar(path, "COMMAND", command)
+}
+
+// UpdateBypassPermissions 更新 .env 文件中的 BYPASS_PERMISSIONS 值。
+func UpdateBypassPermissions(path string, bypass bool) error {
+	if path == "" {
+		path = ".env"
+	}
+	val := "false"
+	if bypass {
+		val = "true"
+	}
+	return updateEnvVar(path, "BYPASS_PERMISSIONS", val)
+}
+
+// updateEnvVar 逐行扫描 env 文件，替换或追加指定 key。
+func updateEnvVar(path, key, value string) error {
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read env file failed: %w", err)
+	}
+
+	prefix := key + "="
+	lines := strings.Split(string(data), "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, prefix) {
+			// 保留行首缩进/注释标记（如果有）
+			idx := strings.Index(line, prefix)
+			lines[i] = line[:idx] + prefix + value
+			found = true
+			break
+		}
+	}
+	if !found {
+		lines = append(lines, prefix+value)
+	}
+
+	out := strings.Join(lines, "\n")
+	if err := os.WriteFile(path, []byte(out), 0644); err != nil {
+		return fmt.Errorf("write env file failed: %w", err)
+	}
+	return nil
 }
