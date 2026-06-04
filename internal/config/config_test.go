@@ -2,6 +2,8 @@ package config
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -315,6 +317,45 @@ func TestLoad_NoisePatterns(t *testing.T) {
 	for i := range want {
 		if cfg.NoisePatterns[i] != want[i] {
 			t.Errorf("NoisePatterns[%d] = %q, want %q", i, cfg.NoisePatterns[i], want[i])
+		}
+	}
+}
+
+func TestUpdateEnvVars_UpdatesAtomically(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, ".env")
+	initial := strings.Join([]string{
+		"LARK_APP_ID=old_id",
+		"LARK_APP_SECRET=old_secret",
+		"COMMAND=claude",
+		"BYPASS_PERMISSIONS=false",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(initial), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := UpdateEnvVars(path, map[string]string{
+		"COMMAND":            "bash -il",
+		"BYPASS_PERMISSIONS": "true",
+		"LARK_APP_SECRET":    "new_secret",
+	})
+	if err != nil {
+		t.Fatalf("UpdateEnvVars() error = %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(data)
+	for _, want := range []string{
+		"LARK_APP_ID=old_id",
+		"LARK_APP_SECRET=new_secret",
+		"COMMAND=bash -il",
+		"BYPASS_PERMISSIONS=true",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("updated env missing %q:\n%s", want, got)
 		}
 	}
 }

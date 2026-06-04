@@ -78,15 +78,18 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 		cfg, err := config.Load(".env")
 		if err != nil {
 			return map[string]interface{}{
-				"command":           "claude",
+				"tool":              "claude",
+				"command":           "",
 				"bypassPermissions": false,
 				"appID":             "",
 				"appSecret":         "",
 				"error":             err.Error(),
 			}
 		}
+		tool := detectTool(cfg.Command)
 		return map[string]interface{}{
-			"command":           detectTool(cfg.Command),
+			"tool":              tool,
+			"command":           cfg.Command,
 			"bypassPermissions": cfg.BypassPermissions,
 			"appID":             cfg.AppID,
 			"appSecret":         cfg.AppSecret,
@@ -133,38 +136,42 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 		return map[string]interface{}{"success": true}
 	})
 
-	w.Bind("saveConfig", func(command string, bypass bool, appID, appSecret string) map[string]interface{} {
-		// 读取旧配置，判断 AI 工具配置是否变化（决定是否热重启 tmux）
+	w.Bind("saveConfig", func(tool, command string, bypass bool, appID, appSecret string) map[string]interface{} {
+		// Read the old config to decide whether tmux needs to be restarted.
 		oldCfg, _ := config.Load(".env")
-		var oldTool string
+		var oldCommand string
 		var oldBypass bool
 		if oldCfg != nil {
-			oldTool = detectTool(oldCfg.Command)
+			oldCommand = oldCfg.Command
 			oldBypass = oldCfg.BypassPermissions
 		}
-		tmuxChanged := oldTool != command || oldBypass != bypass
-
-		if err := config.UpdateCommand(".env", command); err != nil {
-			return map[string]interface{}{"success": false, "error": err.Error()}
+		command = commandFromTool(tool, command)
+		if command == "" {
+			return map[string]interface{}{"success": false, "error": "Command is required"}
 		}
-		if err := config.UpdateBypassPermissions(".env", bypass); err != nil {
-			return map[string]interface{}{"success": false, "error": err.Error()}
-		}
-		if appID != "" {
-			if err := config.UpdateAppID(".env", appID); err != nil {
-				return map[string]interface{}{"success": false, "error": err.Error()}
-			}
-		}
-		if appSecret != "" {
-			if err := config.UpdateAppSecret(".env", appSecret); err != nil {
-				return map[string]interface{}{"success": false, "error": err.Error()}
-			}
-		}
-
 		if firstRun {
 			if appID == "" || appSecret == "" {
 				return map[string]interface{}{"success": false, "error": "App ID and App Secret are required"}
 			}
+		}
+
+		updates := map[string]string{
+			"COMMAND":            command,
+			"BYPASS_PERMISSIONS": boolString(bypass),
+		}
+		if appID != "" {
+			updates["LARK_APP_ID"] = appID
+		}
+		if appSecret != "" {
+			updates["LARK_APP_SECRET"] = appSecret
+		}
+		if err := config.UpdateEnvVars(".env", updates); err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
+
+		tmuxChanged := oldCommand != command || oldBypass != bypass
+
+		if firstRun {
 			// First-run: exit the helper so main process can reload config.
 			go w.Terminate()
 			return map[string]interface{}{"success": true}
@@ -335,8 +342,14 @@ func configHTML() string {
       <option value="claude">Claude</option>
       <option value="codex">Codex</option>
       <option value="opencode">OpenCode</option>
+      <option value="custom">Custom</option>
     </select>
     <div class="hint">The terminal command to bridge via tmux.</div>
+  </div>
+
+  <div class="field" id="customCommandField" style="display:none;">
+    <label for="customCommand">Command</label>
+    <input type="text" id="customCommand" placeholder="bash -il">
   </div>
 
   <div class="field" id="bypassField">
@@ -384,7 +397,10 @@ func configHTML() string {
 
     function updateBypassVisibility() {
       const bypassField = $('bypassField');
-      if ($('command').value === 'opencode') {
+      const customCommandField = $('customCommandField');
+      const isCustom = $('command').value === 'custom';
+      customCommandField.style.display = isCustom ? '' : 'none';
+      if ($('command').value === 'opencode' || isCustom) {
         bypassField.style.display = 'none';
       } else {
         bypassField.style.display = '';
@@ -400,7 +416,8 @@ func configHTML() string {
         }
         $('appID').value = cfg.appID || '';
         $('appSecret').value = cfg.appSecret || '';
-        $('command').value = cfg.command || 'claude';
+        $('command').value = cfg.tool || 'claude';
+        $('customCommand').value = cfg.command || '';
         $('bypass').checked = !!cfg.bypassPermissions;
         updateBypassVisibility();
       } catch (e) {
@@ -521,11 +538,12 @@ func configHTML() string {
       btn.disabled = true;
       setStatus('Saving...');
       try {
-        const cmd = $('command').value;
-        const bypass = cmd === 'opencode' ? false : $('bypass').checked;
+        const tool = $('command').value;
+        const cmd = tool === 'custom' ? $('customCommand').value.trim() : tool;
+        const bypass = (tool === 'opencode' || tool === 'custom') ? false : $('bypass').checked;
         const appID = $('appID').value.trim();
         const appSecret = $('appSecret').value.trim();
-        const res = await window.saveConfig(cmd, bypass, appID, appSecret);
+        const res = await window.saveConfig(tool, cmd, bypass, appID, appSecret);
         if (res.success) {
           let msg = 'Saved.';
           if (res.tmuxChanged) msg += ' Tmux restarted automatically.';
@@ -547,7 +565,7 @@ func configHTML() string {
 </html>`
 }
 
-// detectTool 从命令字符串中识别 AI 工具名称。
+// detectTool identifies the selected AI tool from a command string.
 func detectTool(command string) string {
 	fields := strings.Fields(command)
 	for _, f := range fields {
@@ -570,5 +588,28 @@ func detectTool(command string) string {
 			return "claude"
 		}
 	}
-	return "claude"
+	return "custom"
+}
+
+func commandFromTool(tool, command string) string {
+	tool = strings.TrimSpace(tool)
+	command = strings.TrimSpace(command)
+	switch tool {
+	case "claude", "codex", "opencode":
+		return tool
+	case "custom":
+		return command
+	default:
+		if command != "" {
+			return command
+		}
+		return tool
+	}
+}
+
+func boolString(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }

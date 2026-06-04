@@ -26,6 +26,7 @@ type receiverState struct {
 	lastPane string
 	ready    bool // baseline 是否已初始化，防止竞态发送完整 pane
 	mu       sync.Mutex
+	sendMu   sync.Mutex
 }
 
 // BridgeConfig 创建 Bridge 所需的全部配置
@@ -55,6 +56,7 @@ type Bridge struct {
 	interruptMu       sync.Mutex
 	lastInterrupt     time.Time
 	wg                sync.WaitGroup
+	sendWg            sync.WaitGroup
 	closeOnce         sync.Once
 	noisePatterns     []string
 	metrics           bridgeMetrics
@@ -294,6 +296,7 @@ func (b *Bridge) Shutdown(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		b.wg.Wait()
+		b.sendWg.Wait()
 		close(done)
 	}()
 	select {
@@ -408,8 +411,14 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 		}
 		hasDiff = true
 
-		// 并发发送消息块，避免多 receiver 串行延迟叠加
-		go b.sendBlocks(ctx, key, diff)
+		// Send to the same receiver serially so newer diffs cannot overtake older ones.
+		state.sendMu.Lock()
+		b.sendWg.Add(1)
+		go func() {
+			defer b.sendWg.Done()
+			defer state.sendMu.Unlock()
+			b.sendBlocks(ctx, key, diff)
+		}()
 		return true
 	})
 

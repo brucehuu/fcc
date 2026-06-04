@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -172,37 +173,80 @@ func UpdateBypassPermissions(path string, bypass bool) error {
 	return updateEnvVar(path, "BYPASS_PERMISSIONS", val)
 }
 
-// updateEnvVar 逐行扫描 env 文件，替换或追加指定 key。
+// UpdateEnvVars atomically updates several .env keys in one write.
+func UpdateEnvVars(path string, updates map[string]string) error {
+	if path == "" {
+		path = ".env"
+	}
+	return updateEnvVars(path, updates)
+}
+
+// updateEnvVar scans the env file line by line, replacing or appending one key.
 func updateEnvVar(path, key, value string) error {
+	return updateEnvVars(path, map[string]string{key: value})
+}
+
+func updateEnvVars(path string, updates map[string]string) error {
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("read env file failed: %w", err)
 	}
 
-	prefix := key + "="
 	lines := strings.Split(string(data), "\n")
-	found := false
+	remaining := make(map[string]string, len(updates))
+	for k, v := range updates {
+		remaining[k] = v
+	}
+
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, prefix) {
-			// 保留行首缩进/注释标记（如果有）
-			idx := strings.Index(line, prefix)
-			lines[i] = line[:idx] + prefix + value
-			found = true
-			break
-		}
-	}
-	if !found {
-		if len(lines) == 1 && lines[0] == "" {
-			lines[0] = prefix + value
-		} else {
-			lines = append(lines, prefix+value)
+		for key, value := range remaining {
+			prefix := key + "="
+			if strings.HasPrefix(trimmed, prefix) {
+				idx := strings.Index(line, prefix)
+				lines[i] = line[:idx] + prefix + value
+				delete(remaining, key)
+				break
+			}
 		}
 	}
 
+	for key, value := range remaining {
+		line := key + "=" + value
+		if len(lines) == 1 && lines[0] == "" {
+			lines[0] = line
+			continue
+		}
+		lines = append(lines, line)
+	}
+
 	out := strings.Join(lines, "\n")
-	if err := os.WriteFile(path, []byte(out), 0644); err != nil {
+	if err := writeFileAtomic(path, []byte(out), 0644); err != nil {
 		return fmt.Errorf("write env file failed: %w", err)
 	}
 	return nil
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tmp, err := os.CreateTemp(dir, "."+base+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
