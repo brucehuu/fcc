@@ -136,6 +136,22 @@ func parseInt(s string, def int) int {
 	return n
 }
 
+// UpdateAppID 更新 .env 文件中的 LARK_APP_ID 值。
+func UpdateAppID(path, appID string) error {
+	if path == "" {
+		path = ".env"
+	}
+	return updateEnvVar(path, "LARK_APP_ID", appID)
+}
+
+// UpdateAppSecret 更新 .env 文件中的 LARK_APP_SECRET 值。
+func UpdateAppSecret(path, appSecret string) error {
+	if path == "" {
+		path = ".env"
+	}
+	return updateEnvVar(path, "LARK_APP_SECRET", appSecret)
+}
+
 // UpdateCommand 更新 .env 文件中的 COMMAND 值。
 func UpdateCommand(path, command string) error {
 	if path == "" {

@@ -22,7 +22,7 @@ var (
 const (
 	configWindowTitle = "fcc — Config"
 	configWidth       = 480
-	configHeight      = 420
+	configHeight      = 520
 	configWindowFlag  = "--config-window"
 )
 
@@ -74,33 +74,53 @@ func RunConfigWindow(iconPNG []byte) {
 			return map[string]interface{}{
 				"command":           "claude",
 				"bypassPermissions": false,
+				"appID":             "",
+				"appSecret":         "",
 				"error":             err.Error(),
 			}
 		}
 		return map[string]interface{}{
 			"command":           detectTool(cfg.Command),
 			"bypassPermissions": cfg.BypassPermissions,
+			"appID":             cfg.AppID,
+			"appSecret":         cfg.AppSecret,
 		}
 	})
 
-	w.Bind("saveConfig", func(command string, bypass bool) map[string]interface{} {
+	w.Bind("saveConfig", func(command string, bypass bool, appID, appSecret string) map[string]interface{} {
+		// 读取旧配置，判断 AI 工具配置是否变化（决定是否热重启 tmux）
+		oldCfg, _ := config.Load(".env")
+		oldTool := detectTool(oldCfg.Command)
+		tmuxChanged := oldTool != command || oldCfg.BypassPermissions != bypass
+
 		if err := config.UpdateCommand(".env", command); err != nil {
 			return map[string]interface{}{"success": false, "error": err.Error()}
 		}
 		if err := config.UpdateBypassPermissions(".env", bypass); err != nil {
 			return map[string]interface{}{"success": false, "error": err.Error()}
 		}
-
-		// 通知主进程热重启 tmux
-		data, err := os.ReadFile("/tmp/fcc.pid")
-		if err == nil {
-			var pid int
-			if _, err := fmt.Sscanf(string(data), "%d", &pid); err == nil {
-				_ = syscall.Kill(pid, syscall.SIGUSR1)
+		if appID != "" {
+			if err := config.UpdateAppID(".env", appID); err != nil {
+				return map[string]interface{}{"success": false, "error": err.Error()}
+			}
+		}
+		if appSecret != "" {
+			if err := config.UpdateAppSecret(".env", appSecret); err != nil {
+				return map[string]interface{}{"success": false, "error": err.Error()}
 			}
 		}
 
-		return map[string]interface{}{"success": true}
+		if tmuxChanged {
+			data, err := os.ReadFile("/tmp/fcc.pid")
+			if err == nil {
+				var pid int
+				if _, err := fmt.Sscanf(string(data), "%d", &pid); err == nil {
+					_ = syscall.Kill(pid, syscall.SIGUSR1)
+				}
+			}
+		}
+
+		return map[string]interface{}{"success": true, "tmuxChanged": tmuxChanged}
 	})
 
 	w.Run()
@@ -129,7 +149,7 @@ func configHTML() string {
       color: #555;
       margin-bottom: 6px;
     }
-    select, button {
+    select, input[type="text"], input[type="password"], button {
       font-family: inherit;
       font-size: 13px;
       padding: 8px 10px;
@@ -139,6 +159,7 @@ func configHTML() string {
       width: 100%;
       outline: none;
     }
+    select:focus, input[type="text"]:focus, input[type="password"]:focus { border-color: #007aff; }
     select:focus { border-color: #007aff; }
     button {
       background: #007aff;
@@ -180,6 +201,17 @@ func configHTML() string {
 </head>
 <body>
   <h1>fcc Configuration</h1>
+
+  <div class="field">
+    <label for="appID">Lark App ID</label>
+    <input type="text" id="appID" placeholder="cli_xxxxxxxxxxxxx">
+  </div>
+
+  <div class="field">
+    <label for="appSecret">Lark App Secret</label>
+    <input type="password" id="appSecret" placeholder="xxxxxxxxxxxxxxxxxxxxxx">
+    <div class="hint">Leave blank to keep current value.</div>
+  </div>
 
   <div class="field">
     <label for="command">AI Tool</label>
@@ -227,6 +259,8 @@ func configHTML() string {
           setStatus('Load failed: ' + cfg.error, true);
           return;
         }
+        $('appID').value = cfg.appID || '';
+        $('appSecret').value = cfg.appSecret || '';
         $('command').value = cfg.command || 'claude';
         $('bypass').checked = !!cfg.bypassPermissions;
         updateBypassVisibility();
@@ -242,9 +276,14 @@ func configHTML() string {
       try {
         const cmd = $('command').value;
         const bypass = cmd === 'opencode' ? false : $('bypass').checked;
-        const res = await window.saveConfig(cmd, bypass);
+        const appID = $('appID').value.trim();
+        const appSecret = $('appSecret').value.trim();
+        const res = await window.saveConfig(cmd, bypass, appID, appSecret);
         if (res.success) {
-          setStatus('Saved. Tmux will restart automatically.', false);
+          let msg = 'Saved.';
+          if (res.tmuxChanged) msg += ' Tmux restarted automatically.';
+          if (appID || appSecret) msg += ' Restart fcc to apply Lark credentials.';
+          setStatus(msg, false);
         } else {
           setStatus('Save failed: ' + (res.error || 'unknown'), true);
         }
