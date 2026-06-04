@@ -26,7 +26,7 @@ type Config struct {
 
 func Load(path string) (*Config, error) {
 	if path == "" {
-		path = "env"
+		path = ".env"
 	}
 	if _, err := os.Stat(path); err == nil {
 		if err := godotenv.Load(path); err != nil {

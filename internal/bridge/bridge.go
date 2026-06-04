@@ -92,7 +92,7 @@ func New(cfg *BridgeConfig) (*Bridge, error) {
 	}
 	b.messenger = bot.New(cfg.AppID, cfg.AppSecret, b.handleMessage, cfg.SendRetries)
 
-	tm := terminal.NewTmuxSession("feishu-connect")
+	tm := terminal.NewTmuxSession("fcc")
 	if !tm.IsAvailable() {
 		b.messenger.Close()
 		return nil, fmt.Errorf("tmux is not installed. Please install it with: brew install tmux")

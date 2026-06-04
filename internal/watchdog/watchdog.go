@@ -1,0 +1,212 @@
+package watchdog
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"time"
+
+	"feishu-connect/internal/log"
+)
+
+const (
+	watchdogPidFile = "/tmp/fcc-watchdog.pid"
+	fccPidFile      = "/tmp/fcc.pid"
+	checkInterval   = 3 * time.Minute
+)
+
+// ForkIfNeeded 检查是否已有 watchdog 在运行，没有则 fork 一个。
+// 在正常 fcc 模式启动时调用。
+func ForkIfNeeded() error {
+	if isWatchdogRunning() {
+		log.Info("[watchdog] already running, skipping")
+		return nil
+	}
+
+	// 用文件锁防止多个 fcc 同时 fork watchdog（竞态）
+	lockFile := "/tmp/fcc-watchdog.lock"
+	fd, err := syscall.Open(lockFile, syscall.O_CREAT|syscall.O_RDWR, 0644)
+	if err != nil {
+		return fmt.Errorf("open lock file: %w", err)
+	}
+	defer syscall.Close(fd)
+
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		log.Info("[watchdog] another fcc is forking, skipping")
+		return nil
+	}
+	defer syscall.Flock(fd, syscall.LOCK_UN)
+
+	// 获取锁后再次检查（防 TOCTOU 竞态）
+	if isWatchdogRunning() {
+		log.Info("[watchdog] already running (after lock), skipping")
+		return nil
+	}
+
+	return forkWatchdog()
+}
+
+// Run 运行 watchdog 主循环。在 WATCHDOG=1 模式下调用。
+func Run() error {
+	pidStr := fmt.Sprintf("%d", os.Getpid())
+
+	if err := os.WriteFile(watchdogPidFile, []byte(pidStr), 0644); err != nil {
+		return fmt.Errorf("write pid file failed: %w", err)
+	}
+
+	// 防竞态：再次读取确认是自己的 PID
+	data, _ := os.ReadFile(watchdogPidFile)
+	if string(data) != pidStr {
+		log.Info("[watchdog] another instance won, exiting")
+		return nil
+	}
+
+	log.Infof("[watchdog] started, checking every %v", checkInterval)
+
+	ticker := time.NewTicker(checkInterval)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if !isFCCRunning() {
+			log.Warn("[watchdog] fcc not running, restarting...")
+			if err := startFCC(); err != nil {
+				log.Errorf("[watchdog] restart failed: %v", err)
+			}
+		}
+	}
+
+	return nil
+}
+
+// WriteFCCPID 写入 fcc 进程 PID 到文件。
+func WriteFCCPID() error {
+	return os.WriteFile(fccPidFile, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+}
+
+// RemoveFCCPID 删除 fcc 的 PID 文件。
+func RemoveFCCPID() {
+	_ = os.Remove(fccPidFile)
+}
+
+func isWatchdogRunning() bool {
+	data, err := os.ReadFile(watchdogPidFile)
+	if err != nil {
+		return false
+	}
+
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
+		return false
+	}
+
+	return processExists(pid)
+}
+
+func forkWatchdog() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable path failed: %w", err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working dir failed: %w", err)
+	}
+
+	cmd := exec.Command(exe)
+	cmd.Dir = wd
+	cmd.Env = append(os.Environ(), "WATCHDOG=1")
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+		Pgid:    0,
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("fork watchdog failed: %w", err)
+	}
+
+	log.Infof("[watchdog] forked (pid: %d)", cmd.Process.Pid)
+	return nil
+}
+
+func isFCCRunning() bool {
+	data, err := os.ReadFile(fccPidFile)
+	if err != nil {
+		return false
+	}
+
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
+		return false
+	}
+
+	return processExists(pid)
+}
+
+func startFCC() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable path failed: %w", err)
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get working dir failed: %w", err)
+	}
+
+	// 打开日志文件，把 fcc 的 stderr 重定向过来，方便排查启动失败
+	logFile, err := os.OpenFile("log/fcc-restart.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		logFile = os.Stderr
+	}
+
+	// 清理可能残留的 tmux 会话，否则 fcc 启动会因会话已存在而失败
+	_ = exec.Command("tmux", "kill-session", "-t", "fcc").Run()
+
+	cmd := exec.Command(exe)
+	cmd.Dir = wd
+	// 关键：必须去掉 WATCHDOG=1，否则启动的还是 watchdog 模式
+	cmd.Env = stripEnv(os.Environ(), "WATCHDOG")
+	cmd.Stdin = nil
+	cmd.Stdout = nil
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+		Pgid:    0,
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start fcc failed: %w", err)
+	}
+
+	log.Infof("[watchdog] restarted fcc (pid: %d)", cmd.Process.Pid)
+	return nil
+}
+
+// processExists 使用 ps 命令检查进程是否存活（macOS 上比 Signal(0) 更可靠）
+func processExists(pid int) bool {
+	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "pid=").Output()
+	if err != nil {
+		return false
+	}
+	var found int
+	_, err = fmt.Sscanf(string(out), "%d", &found)
+	return err == nil && found == pid
+}
+
+// stripEnv 从环境变量中移除指定 key
+func stripEnv(env []string, key string) []string {
+	prefix := key + "="
+	result := make([]string, 0, len(env))
+	for _, e := range env {
+		if !strings.HasPrefix(e, prefix) {
+			result = append(result, e)
+		}
+	}
+	return result
+}

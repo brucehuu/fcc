@@ -13,14 +13,25 @@ import (
 	"feishu-connect/internal/bridge"
 	"feishu-connect/internal/config"
 	"feishu-connect/internal/log"
+	"feishu-connect/internal/watchdog"
 )
 
 const version = "0.1.0"
 
 func main() {
+	// watchdog 模式：尽早进入，跳过业务初始化
+	if os.Getenv("WATCHDOG") == "1" {
+		log.SetLevel("info")
+		if err := watchdog.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "watchdog: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] [workdir]\n\n", os.Args[0])
-		fmt.Fprintf(os.Stderr, "feishu-connect - 本机终端与飞书的双向实时桥接服务\n\n")
+		fmt.Fprintf(os.Stderr, "fcc - 本机终端与飞书的双向实时桥接服务\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, "\nExamples:\n")
@@ -35,16 +46,21 @@ func main() {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Printf("feishu-connect %s\n", version)
+		fmt.Printf("fcc %s\n", version)
 		os.Exit(0)
 	}
 
-	cfg, err := config.Load("env")
+	cfg, err := config.Load(".env")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
 		os.Exit(1)
 	}
 	log.SetLevel(cfg.LogLevel)
+
+	// 启动 watchdog（完全独立进程）
+	if err := watchdog.ForkIfNeeded(); err != nil {
+		log.Warnf("[main] fork watchdog: %v", err)
+	}
 
 	// 解析命令行参数：可选的项目路径
 	workDir := ""
@@ -56,7 +72,7 @@ func main() {
 		}
 	}
 
-	log.Infof("[main] starting feishu-connect with command: %s", cfg.Command)
+	log.Infof("[main] starting fcc with command: %s", cfg.Command)
 	if workDir != "" {
 		log.Infof("[main] working directory: %s", workDir)
 	}
@@ -104,6 +120,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 写入 PID 文件，供 watchdog 监控
+	if err := watchdog.WriteFCCPID(); err != nil {
+		log.Warnf("[main] write pid file: %v", err)
+	}
+	defer watchdog.RemoveFCCPID()
+
 	// 前台 attach tmux，用户可以在电脑终端看到完整界面
 	fmt.Println()
 	fmt.Println("[main] attaching to tmux session...")
@@ -111,7 +133,7 @@ func main() {
 	fmt.Println("  Press Ctrl+C to stop the program")
 	fmt.Println()
 
-	cmd := exec.Command("tmux", "attach", "-t", "feishu-connect")
+	cmd := exec.Command("tmux", "attach", "-t", "fcc")
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -120,7 +142,7 @@ func main() {
 		log.Warnf("[main] tmux attach exited: %v", err)
 	}
 
-	fmt.Println("[main] detached from tmux. Press Ctrl+C to stop or re-attach with: tmux attach -t feishu-connect")
+	fmt.Println("[main] detached from tmux. Press Ctrl+C to stop or re-attach with: tmux attach -t fcc")
 
 	<-ctx.Done()
 
