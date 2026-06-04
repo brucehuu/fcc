@@ -19,7 +19,7 @@ import (
 const version = "0.1.0"
 
 func main() {
-	// watchdog 模式：尽早进入，跳过业务初始化
+	// watchdog 模式：尽早进入，跳过业务初始化和 Reset
 	if os.Getenv("WATCHDOG") == "1" {
 		log.SetLevel("info")
 		if err := watchdog.Run(); err != nil {
@@ -28,6 +28,11 @@ func main() {
 		}
 		return
 	}
+
+	// 每次正常启动都先杀干净旧进程（主进程 + watchdog），然后重新启动
+	// 场景：手动重启 / 系统更新后启动 / 首次启动（幂等）
+	log.SetLevel("info")
+	watchdog.Reset()
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] [workdir]\n\n", os.Args[0])

@@ -210,3 +210,48 @@ func stripEnv(env []string, key string) []string {
 	}
 	return result
 }
+
+// Reset 杀掉所有 fcc 相关进程（主进程 + watchdog），清理 PID 文件。
+// 用于用户主动重启、系统更新等场景。幂等：无进程时安全。
+// WATCHDOG 模式下不应调用此函数（会自杀）。
+func Reset() {
+	log.Info("[watchdog] reset: killing all fcc processes")
+
+	// 1. 先通过 PID 文件精准 kill（SIGTERM 优雅退出）
+	killFromPIDFile(watchdogPidFile)
+	killFromPIDFile(fccPidFile)
+
+	// 2. 兜底：pkill -9 -x fcc 杀掉所有叫 fcc 的进程（防止有漏网的）
+	_ = exec.Command("pkill", "-9", "-x", "fcc").Run()
+
+	// 3. 清理残留的 tmux 会话
+	_ = exec.Command("tmux", "kill-session", "-t", "fcc").Run()
+
+	// 4. 删除所有 PID 文件和锁文件
+	_ = os.Remove(watchdogPidFile)
+	_ = os.Remove(fccPidFile)
+	_ = os.Remove("/tmp/fcc-watchdog.lock")
+
+	// 5. 等待进程退出
+	time.Sleep(1 * time.Second)
+
+	log.Info("[watchdog] reset done")
+}
+
+// killFromPIDFile 读取 PID 文件，发送 SIGTERM 信号。如果进程不存在则跳过。
+func killFromPIDFile(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
+		return
+	}
+	if processExists(pid) {
+		proc, err := os.FindProcess(pid)
+		if err == nil {
+			_ = proc.Signal(syscall.SIGTERM)
+		}
+	}
+}
