@@ -75,12 +75,6 @@ func main() {
 		return
 	}
 
-	// 单实例检查：如果 fcc 已经在跑，直接退出
-	if isFCCRunning() {
-		fmt.Fprintln(os.Stderr, "fcc is already running")
-		os.Exit(1)
-	}
-
 	// 每次正常启动都先杀干净旧进程（主进程 + watchdog），然后重新启动
 	log.SetLevel("info")
 	watchdog.Reset()
