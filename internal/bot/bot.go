@@ -169,7 +169,7 @@ func (b *Bot) downloadImage(ctx context.Context, messageID, imageKey string) (st
 	}
 
 	// 保存图片到本地
-	dir := "feishu_images"
+	dir := "log/images"
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("create image dir failed: %w", err)
 	}
@@ -191,7 +191,7 @@ func (b *Bot) downloadImage(ctx context.Context, messageID, imageKey string) (st
 // CleanupOldImages 清理 N 天前的图片，防止磁盘无限增长
 // 由 main 启动时和定期调用
 func (b *Bot) CleanupOldImages(maxAge time.Duration) error {
-	dir := "feishu_images"
+	dir := "log/images"
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

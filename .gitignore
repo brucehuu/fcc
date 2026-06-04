@@ -1,12 +1,11 @@
-feishu-connect
-feishu-connect.log
+fcc
+fcc.log
 .env
 *.log
 .DS_Store
 task_plan.md
 findings.md
 progress.md
-feishu_images/
 log/
 .claude/
 review/
