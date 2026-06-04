@@ -24,6 +24,20 @@ var appIconPNG []byte
 
 const version = "0.1.0"
 
+func processIcon(src []byte) []byte {
+	icon := src
+	if removed, ok := tray.RemoveWhiteBackground(icon); ok {
+		icon = removed
+	}
+	if padded, ok := tray.AddIconPadding(icon, 18); ok {
+		icon = padded
+	}
+	if rounded, ok := tray.ApplyRoundedCorners(icon); ok {
+		icon = rounded
+	}
+	return icon
+}
+
 func isFCCRunning() bool {
 	data, err := os.ReadFile("/tmp/fcc.pid")
 	if err != nil {
@@ -46,13 +60,7 @@ func main() {
 	// --config-window 模式：helper 子进程跑 webview 配置窗口。
 	// 需要在 Dock 显示 fcc 图标，所以提前处理图标并传给 RunConfigWindow。
 	if len(os.Args) > 1 && os.Args[1] == "--config-window" {
-		iconPNG := appIconPNG
-		if padded, ok := tray.AddIconPadding(appIconPNG, 18); ok {
-			iconPNG = padded
-		}
-		if rounded, ok := tray.ApplyRoundedCorners(iconPNG); ok {
-			iconPNG = rounded
-		}
+		iconPNG := processIcon(appIconPNG)
 		tray.RunConfigWindow(iconPNG)
 		return
 	}
@@ -83,7 +91,7 @@ func main() {
 
 	// 给 fcc 可执行文件自身设置 Finder 图标（幂等，失败不阻塞启动）。
 	if exe, err := os.Executable(); err == nil {
-		_ = tray.SetFinderIcon(exe, appIconPNG)
+		_ = tray.SetFinderIcon(exe, processIcon(appIconPNG))
 	}
 
 	flag.Usage = func() {

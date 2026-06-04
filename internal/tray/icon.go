@@ -12,7 +12,7 @@ import (
 
 const (
 	iconPath    = "assets/fcc-logo.png"
-	cornerRatio = 18 // % of width used as corner radius — squircle-style rounding
+	cornerRatio = 22 // % of width used as corner radius — larger for Dock visibility
 )
 
 // loadIcon returns PNG bytes for the menu bar icon. If the user has dropped
@@ -88,6 +88,39 @@ func ApplyRoundedCorners(pngBytes []byte) ([]byte, bool) {
 				B: uint8(b >> 8),
 				A: uint8(a >> 8),
 			})
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return nil, false
+	}
+	return buf.Bytes(), true
+}
+
+// RemoveWhiteBackground 把接近白色的背景像素变为透明（alpha=0）。
+// 原图是 RGB 无 alpha，Dock 里白色背景会把圆角盖住，必须先抠掉白底。
+func RemoveWhiteBackground(pngBytes []byte) ([]byte, bool) {
+	src, _, err := image.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		return nil, false
+	}
+	b := src.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w <= 0 || h <= 0 {
+		return nil, false
+	}
+
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			r, g, bch, a := src.At(x, y).RGBA()
+			r8, g8, b8, a8 := uint8(r>>8), uint8(g>>8), uint8(bch>>8), uint8(a>>8)
+			// 接近白色的像素（阈值 240/255）设为透明
+			if r8 > 240 && g8 > 240 && b8 > 240 {
+				a8 = 0
+			}
+			dst.SetRGBA(x, y, color.RGBA{R: r8, G: g8, B: b8, A: a8})
 		}
 	}
 
