@@ -108,20 +108,9 @@ func RunConfigWindow(iconPNG []byte, firstRun bool) {
 	})
 
 	w.Bind("checkUpdate", func() map[string]interface{} {
-		state := updater.CheckNow("")
-		if state == nil {
-			return map[string]interface{}{"success": false, "error": "check failed"}
-		}
-		if state.Error != "" {
-			return map[string]interface{}{"success": false, "error": state.Error}
-		}
-		return map[string]interface{}{
-			"success":        true,
-			"currentVersion": state.CurrentVersion,
-			"latestVersion":  state.LatestVersion,
-			"hasUpdate":      state.Status == updater.StatusDownloaded && state.Path != "",
-			"status":         state.Status,
-		}
+		// Run check in background so the webview UI doesn't freeze.
+		go updater.CheckNow("")
+		return map[string]interface{}{"checking": true}
 	})
 
 	w.Bind("applyUpdate", func() map[string]interface{} {
@@ -462,35 +451,52 @@ func configHTML() string {
       const infoEl = $('updateInfo');
       btn.disabled = true;
       btn.textContent = 'Checking...';
+      infoEl.textContent = 'Checking for updates...';
+      infoEl.className = 'update-info';
+      $('updateBtn').style.display = 'none';
+
       try {
-        const res = await window.checkUpdate();
-        if (res.success) {
-          if (res.hasUpdate) {
-            infoEl.textContent = res.currentVersion + ' → ' + res.latestVersion + ' available';
-            infoEl.className = 'update-info';
-            $('updateBtn').textContent = 'Restart to Update v' + res.latestVersion;
-            $('updateBtn').style.display = '';
-          } else if (res.status === 'uptodate') {
-            infoEl.textContent = 'v' + res.currentVersion + ' — up to date';
-            infoEl.className = 'update-info uptodate';
-            $('updateBtn').style.display = 'none';
-          } else {
-            infoEl.textContent = 'v' + (res.currentVersion || 'unknown');
-            infoEl.className = 'update-info';
-            $('updateBtn').style.display = 'none';
+        await window.checkUpdate();
+        // Poll every 2s until check completes or times out after 60s.
+        let attempts = 0;
+        const poll = setInterval(async () => {
+          attempts++;
+          if (attempts > 30) {
+            clearInterval(poll);
+            infoEl.textContent = 'Check timed out. Try again later.';
+            infoEl.className = 'update-info error';
+            btn.textContent = 'Check for Updates';
+            btn.disabled = false;
+            return;
           }
-          btn.textContent = 'Check for Updates';
-        } else {
-          infoEl.textContent = 'Check failed: ' + (res.error || 'unknown');
-          infoEl.className = 'update-info error';
-          btn.textContent = 'Check for Updates';
-        }
+          const s = await window.getUpdateStatus();
+          if (s.status !== 'checking' && s.status !== 'downloading') {
+            clearInterval(poll);
+            btn.textContent = 'Check for Updates';
+            btn.disabled = false;
+            if (s.error) {
+              infoEl.textContent = 'Check failed: ' + s.error;
+              infoEl.className = 'update-info error';
+            } else if (s.hasUpdate) {
+              infoEl.textContent = s.currentVersion + ' → ' + s.latestVersion + ' available';
+              infoEl.className = 'update-info';
+              $('updateBtn').textContent = 'Restart to Update v' + s.latestVersion;
+              $('updateBtn').style.display = '';
+            } else if (s.status === 'uptodate') {
+              infoEl.textContent = 'v' + s.currentVersion + ' — up to date';
+              infoEl.className = 'update-info uptodate';
+            } else {
+              infoEl.textContent = 'v' + (s.currentVersion || 'unknown');
+              infoEl.className = 'update-info';
+            }
+          }
+        }, 2000);
       } catch (e) {
         infoEl.textContent = 'Check failed: ' + e.message;
         infoEl.className = 'update-info error';
         btn.textContent = 'Check for Updates';
+        btn.disabled = false;
       }
-      btn.disabled = false;
     }
 
     async function doUpdate() {

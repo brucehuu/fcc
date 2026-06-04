@@ -14,9 +14,19 @@
 
 本工具运行前，请确保本机已安装 **tmux** 和 **Go 1.22+**：
 
+### 安装 tmux
+
 ```bash
 brew install tmux
 ```
+
+### 安装 Go
+
+```bash
+brew install go
+```
+
+或从 [Go 官网](https://go.dev/dl/) 下载 pkg 安装包。
 
 验证安装：
 

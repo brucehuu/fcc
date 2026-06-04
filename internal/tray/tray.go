@@ -16,6 +16,7 @@ const (
 
 type Config struct {
 	Version      string
+	Icon         []byte
 	OnOpenConfig func()
 	OnExit       func()
 	OnMenuQuit   func()
@@ -37,7 +38,12 @@ func Run(cfg Config) {
 	// 这里只需启动 systray。
 
 	systray.Run(func() {
-		icon := loadIcon()
+		var icon []byte
+		if len(cfg.Icon) > 0 {
+			icon = cfg.Icon
+		} else {
+			icon = loadIcon()
+		}
 		systray.SetIcon(icon)
 		systray.SetTooltip(tooltipText)
 

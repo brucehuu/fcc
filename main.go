@@ -231,37 +231,24 @@ func main() {
 		}
 	}()
 
-	// tmux attach 必须在子 goroutine 跑 — 主线程要交给 tray.Run 跑 NSApp loop。
-	cmd := exec.Command("tmux", "attach", "-t", "fcc")
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
 	fmt.Println()
-	fmt.Println("[main] fcc ready — tmux attaching in background")
-	fmt.Println("  Press Ctrl+B then D to detach (fcc keeps running in menu bar)")
-	fmt.Println("  Press Ctrl+C, or click 'Quit fcc' in the menu bar, to exit")
+	fmt.Println("[main] fcc is running in the background")
+	fmt.Println("  Use Feishu/Lark to interact with your AI tool")
+	fmt.Println("  Click the fcc icon in the menu bar for config or quit")
+	fmt.Println("  To view the terminal: tmux attach -t fcc")
 	fmt.Println()
-
-	go func() {
-		if err := cmd.Run(); err != nil {
-			log.Warnf("[main] tmux attach exited: %v", err)
-		}
-		log.Info("[main] tmux detached; fcc continues in menu bar")
-	}()
 
 	// 阻塞主线程：跑 NSApp loop 直到用户 Quit。
 	// cfg.OnExit：通用清理（杀 tmux + cancel），Ctrl+C 和菜单 Quit 都会走这里。
 	// cfg.OnMenuQuit：只在用户点菜单 Quit 时跑，**杀 watchdog**（彻底退出）。
+	iconPNG := processIcon(appIconPNG)
 	tray.Run(tray.Config{
 		Version:      version,
+		Icon:         iconPNG,
 		OnOpenConfig: tray.OpenConfig,
 		OnExit: func() {
 			log.Info("[main] shutting down...")
 			cancel()
-			if cmd.Process != nil {
-				_ = cmd.Process.Kill()
-			}
 		},
 		OnMenuQuit: func() {
 			log.Info("[main] menu quit requested — killing watchdog and tmux session")
