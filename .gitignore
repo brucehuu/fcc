@@ -1,0 +1,26 @@
+feishu-connect
+feishu-connect.log
+.env
+*.log
+.DS_Store
+task_plan.md
+findings.md
+progress.md
+feishu_images/
+log/
+.claude/
+review/
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
