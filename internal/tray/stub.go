@@ -17,5 +17,11 @@ func Stop() {}
 // OpenConfig is a no-op on non-darwin platforms.
 func OpenConfig() {}
 
-// ensureMenuBarApp is a no-op on non-darwin platforms.
-func ensureMenuBarApp() {}
+// SetupMainApp is a no-op on non-darwin platforms.
+func SetupMainApp() {}
+
+// SetAppIcon is a no-op on non-darwin platforms.
+func SetAppIcon(_ []byte) {}
+
+// SetFinderIcon is a no-op on non-darwin platforms.
+func SetFinderIcon(_ string, _ []byte) error { return nil }

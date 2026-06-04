@@ -32,9 +32,8 @@ func Run(cfg Config) {
 		return
 	}
 
-	// 把进程标记为 menu-bar-only 应用（不显示 Dock 图标）。
-	// 必须在创建 NSStatusItem 之前调用。
-	ensureMenuBarApp()
+	// NSApplication 的激活策略已在 main 中通过 tray.SetupMainApp 设为 Accessory，
+	// 这里只需启动 systray。
 
 	systray.Run(func() {
 		icon := loadIcon()

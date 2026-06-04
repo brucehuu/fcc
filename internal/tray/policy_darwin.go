@@ -7,16 +7,70 @@ package tray
 #cgo LDFLAGS: -framework Cocoa
 #import <Cocoa/Cocoa.h>
 
-// setAccessoryActivationPolicy 把当前进程标记为 menu-bar-only 应用。
-// 不设这个的话，裸 CLI 二进制在 macOS 上默认是 NSApplicationActivationPolicyProhibited，
-// 菜单栏 status item 不会显示。
-static void setAccessoryActivationPolicy(void) {
+// setupMainApp 把当前进程设为 Accessory（菜单栏 app，不显示 Dock 图标）。
+static void setupMainApp(void) {
 	[NSApplication sharedApplication];
 	[NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+}
+
+// setAppIcon 只设 applicationIconImage，不改激活策略。
+// config window helper 在 webview 创建完 NSApp 后调用。
+static void setAppIcon(const void *iconData, int iconLen) {
+	if (iconData == NULL || iconLen <= 0) {
+		return;
+	}
+	NSApplication *app = [NSApplication sharedApplication];
+	NSData *nsData = [NSData dataWithBytes:iconData length:iconLen];
+	NSImage *img = [[NSImage alloc] initWithData:nsData];
+	if (img != nil) {
+		[app setApplicationIconImage:img];
+	}
+}
+
+// setFinderIcon 用 NSWorkspace 给指定文件设自定义 Finder 图标。
+static int setFinderIcon(const char *filePath, const void *pngData, int pngLen) {
+	NSString *path = [NSString stringWithUTF8String:filePath];
+	NSData *data = [NSData dataWithBytes:pngData length:pngLen];
+	NSImage *img = [[NSImage alloc] initWithData:data];
+	if (img == nil) {
+		return 0;
+	}
+	BOOL ok = [[NSWorkspace sharedWorkspace] setIcon:img forFile:path options:0];
+	return ok ? 1 : 0;
 }
 */
 import "C"
 
-func ensureMenuBarApp() {
-	C.setAccessoryActivationPolicy()
+import (
+	"fmt"
+	"unsafe"
+)
+
+// SetupMainApp 在 macOS 上把当前进程设为菜单栏 app（Accessory）。
+// 必须在 tray.Run 之前调用，且只需调用一次。
+func SetupMainApp() {
+	C.setupMainApp()
+}
+
+// SetAppIcon 只设 applicationIconImage，不改激活策略。
+// 用于 config window helper 在 webview 创建 NSApp 后设置图标。
+func SetAppIcon(iconPNG []byte) {
+	if len(iconPNG) == 0 {
+		return
+	}
+	C.setAppIcon(unsafe.Pointer(&iconPNG[0]), C.int(len(iconPNG)))
+}
+
+// SetFinderIcon 给指定路径的文件设置 Finder 自定义图标（来自 PNG 字节）。
+func SetFinderIcon(filePath string, pngBytes []byte) error {
+	if len(pngBytes) == 0 {
+		return fmt.Errorf("empty icon data")
+	}
+	cPath := C.CString(filePath)
+	defer C.free(unsafe.Pointer(cPath))
+	ok := C.setFinderIcon(cPath, unsafe.Pointer(&pngBytes[0]), C.int(len(pngBytes)))
+	if ok == 0 {
+		return fmt.Errorf("setFinderIcon failed")
+	}
+	return nil
 }

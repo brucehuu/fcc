@@ -23,7 +23,7 @@ func loadIcon() []byte {
 	if err != nil || len(data) == 0 {
 		return placeholderIcon()
 	}
-	if rounded, ok := applyRoundedCorners(data); ok {
+	if rounded, ok := ApplyRoundedCorners(data); ok {
 		return rounded
 	}
 	return data
@@ -57,9 +57,9 @@ func placeholderIcon() []byte {
 	return buf.Bytes()
 }
 
-// applyRoundedCorners 读取 PNG 字节、给四个角裁圆，再编码回 PNG。
+// ApplyRoundedCorners 读取 PNG 字节、给四个角裁圆，再编码回 PNG。
 // 解码/编码失败时返回 (nil, false)，调用方应回退到原图。
-func applyRoundedCorners(pngBytes []byte) ([]byte, bool) {
+func ApplyRoundedCorners(pngBytes []byte) ([]byte, bool) {
 	src, _, err := image.Decode(bytes.NewReader(pngBytes))
 	if err != nil {
 		return nil, false
@@ -88,6 +88,43 @@ func applyRoundedCorners(pngBytes []byte) ([]byte, bool) {
 				B: uint8(b >> 8),
 				A: uint8(a >> 8),
 			})
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, dst); err != nil {
+		return nil, false
+	}
+	return buf.Bytes(), true
+}
+
+// AddIconPadding 读取 PNG 字节，四周各扩展 paddingPercent% 的空白区域，
+// 再把原图居中贴上去。macOS Dock 图标通常内容只占 ~75-80%，
+// 不加 padding 会显得比别的图标大一圈。
+func AddIconPadding(pngBytes []byte, paddingPercent int) ([]byte, bool) {
+	src, _, err := image.Decode(bytes.NewReader(pngBytes))
+	if err != nil {
+		return nil, false
+	}
+
+	b := src.Bounds()
+	ow, oh := b.Dx(), b.Dy()
+	if ow <= 0 || oh <= 0 {
+		return nil, false
+	}
+
+	// 新画布 = 原图 + 四周 padding
+	padW := ow * paddingPercent / 100
+	padH := oh * paddingPercent / 100
+	w, h := ow+padW*2, oh+padH*2
+
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
+
+	// 居中贴原图
+	offX, offY := padW, padH
+	for y := 0; y < oh; y++ {
+		for x := 0; x < ow; x++ {
+			dst.Set(offX+x, offY+y, src.At(b.Min.X+x, b.Min.Y+y))
 		}
 	}
 

@@ -1,6 +1,8 @@
 package main
 
 import (
+	_ "embed"
+
 	"context"
 	"flag"
 	"fmt"
@@ -17,9 +19,44 @@ import (
 	"feishu-connect/internal/watchdog"
 )
 
+//go:embed assets/fcc-logo.png
+var appIconPNG []byte
+
 const version = "0.1.0"
 
+func isFCCRunning() bool {
+	data, err := os.ReadFile("/tmp/fcc.pid")
+	if err != nil {
+		return false
+	}
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
+		return false
+	}
+	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "pid=").Output()
+	if err != nil {
+		return false
+	}
+	var found int
+	_, err = fmt.Sscanf(string(out), "%d", &found)
+	return err == nil && found == pid
+}
+
 func main() {
+	// --config-window 模式：helper 子进程跑 webview 配置窗口。
+	// 需要在 Dock 显示 fcc 图标，所以提前处理图标并传给 RunConfigWindow。
+	if len(os.Args) > 1 && os.Args[1] == "--config-window" {
+		iconPNG := appIconPNG
+		if padded, ok := tray.AddIconPadding(appIconPNG, 18); ok {
+			iconPNG = padded
+		}
+		if rounded, ok := tray.ApplyRoundedCorners(iconPNG); ok {
+			iconPNG = rounded
+		}
+		tray.RunConfigWindow(iconPNG)
+		return
+	}
+
 	// watchdog 模式：尽早进入，跳过业务初始化和 Reset
 	if os.Getenv("WATCHDOG") == "1" {
 		log.SetLevel("info")
@@ -30,10 +67,24 @@ func main() {
 		return
 	}
 
+	// 单实例检查：如果 fcc 已经在跑，直接退出
+	if isFCCRunning() {
+		fmt.Fprintln(os.Stderr, "fcc is already running")
+		os.Exit(1)
+	}
+
 	// 每次正常启动都先杀干净旧进程（主进程 + watchdog），然后重新启动
-	// 场景：手动重启 / 系统更新后启动 / 首次启动（幂等）
 	log.SetLevel("info")
 	watchdog.Reset()
+
+	// macOS 上尽早初始化 NSApp：菜单栏 app 模式（不显示 Dock 图标）。
+	// 必须在 systray.Run 之前调用。
+	tray.SetupMainApp()
+
+	// 给 fcc 可执行文件自身设置 Finder 图标（幂等，失败不阻塞启动）。
+	if exe, err := os.Executable(); err == nil {
+		_ = tray.SetFinderIcon(exe, appIconPNG)
+	}
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] [workdir]\n\n", os.Args[0])
