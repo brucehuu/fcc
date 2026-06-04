@@ -24,6 +24,7 @@ type Bot struct {
 	client     *lark.Client
 	wsClient   *larkws.Client
 	botOpenID  string
+	botIDMu    sync.RWMutex
 	onMessage  func(chatType, openID, chatID, text string)
 	maxRetries int
 	closeOnce  sync.Once
@@ -91,9 +92,12 @@ func (b *Bot) handleEvent(ctx context.Context, event *larkim.P2MessageReceiveV1)
 
 	sender := event.Event.Sender
 	openID := ""
+	b.botIDMu.RLock()
+	botID := b.botOpenID
+	b.botIDMu.RUnlock()
 	if sender == nil {
 		// 无法确定发送者身份，保守过滤（避免 bot 自己消息回显）
-		if b.botOpenID != "" {
+		if botID != "" {
 			return nil
 		}
 	} else {
@@ -103,7 +107,7 @@ func (b *Bot) handleEvent(ctx context.Context, event *larkim.P2MessageReceiveV1)
 		if sender.SenderId != nil {
 			openID = ptrStr(sender.SenderId.OpenId)
 		}
-		if b.botOpenID != "" && openID == b.botOpenID {
+		if botID != "" && openID == botID {
 			return nil
 		}
 	}
@@ -174,7 +178,8 @@ func (b *Bot) downloadImage(ctx context.Context, messageID, imageKey string) (st
 		return "", fmt.Errorf("create image dir failed: %w", err)
 	}
 
-	filename := filepath.Join(dir, imageKey+".png")
+	safeKey := filepath.Base(imageKey)
+	filename := filepath.Join(dir, safeKey+".png")
 	file, err := os.Create(filename)
 	if err != nil {
 		return "", fmt.Errorf("create image file failed: %w", err)
@@ -236,8 +241,10 @@ func (b *Bot) fetchBotOpenID(ctx context.Context) error {
 		return fmt.Errorf("bot info returned code=%d", result.Code)
 	}
 
+	b.botIDMu.Lock()
 	b.botOpenID = result.Data.Bot.OpenID
-	log.Infof("[bot] bot open_id: %s", b.botOpenID)
+	b.botIDMu.Unlock()
+	log.Infof("[bot] bot open_id: %s", result.Data.Bot.OpenID)
 	return nil
 }
 

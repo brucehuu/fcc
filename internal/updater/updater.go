@@ -207,6 +207,9 @@ func ReplaceBinary(newPath string) error {
 
 	// Move current binary to .old
 	if err := os.Rename(exe, oldPath); err != nil {
+		if os.IsPermission(err) {
+			return fmt.Errorf("permission denied: fcc is installed in a system directory. Please run fcc with sudo or install to a user directory (e.g. ~/.local/bin) to enable auto-updates")
+		}
 		return fmt.Errorf("rename old binary: %w", err)
 	}
 

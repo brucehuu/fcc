@@ -89,10 +89,16 @@ func fetchFile(client *http.Client, url, dest string) error {
 	}
 	defer f.Close()
 
-	_, err = io.Copy(f, resp.Body)
+	const maxSize = 100 * 1024 * 1024 // 100MB
+	lr := io.LimitReader(resp.Body, maxSize+1)
+	n, err := io.Copy(f, lr)
 	if err != nil {
 		os.Remove(dest)
 		return err
+	}
+	if n > maxSize {
+		os.Remove(dest)
+		return fmt.Errorf("file exceeds maximum download size of %d MB", maxSize/1024/1024)
 	}
 	return nil
 }

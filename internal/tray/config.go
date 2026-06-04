@@ -61,7 +61,7 @@ func OpenConfig() {
 
 // RunConfigWindow is the entry point for the --config-window helper mode.
 // It runs the webview in its own main thread and exits when the window closes.
-func RunConfigWindow(iconPNG []byte, firstRun bool) {
+func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 	w := webview.New(false)
 	defer w.Destroy()
 	if len(iconPNG) > 0 {
@@ -109,7 +109,7 @@ func RunConfigWindow(iconPNG []byte, firstRun bool) {
 
 	w.Bind("checkUpdate", func() map[string]interface{} {
 		// Run check in background so the webview UI doesn't freeze.
-		go updater.CheckNow("")
+		go updater.CheckNow(version)
 		return map[string]interface{}{"checking": true}
 	})
 

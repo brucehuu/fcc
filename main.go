@@ -71,12 +71,12 @@ func main() {
 	// 需要在 Dock 显示 fcc 图标，所以提前处理图标并传给 RunConfigWindow。
 	if len(os.Args) > 1 && os.Args[1] == "--config-window" {
 		iconPNG := processIcon(appIconPNG)
-		tray.RunConfigWindow(iconPNG, false)
+		tray.RunConfigWindow(iconPNG, false, version)
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == "--first-run" {
 		iconPNG := processIcon(appIconPNG)
-		tray.RunConfigWindow(iconPNG, true)
+		tray.RunConfigWindow(iconPNG, true, version)
 		return
 	}
 
@@ -175,6 +175,7 @@ func main() {
 	})
 	if err != nil {
 		log.Errorf("failed to create bridge: %v", err)
+		watchdog.Stop()
 		os.Exit(1)
 	}
 	defer b.Close()

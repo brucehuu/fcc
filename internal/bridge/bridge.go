@@ -93,9 +93,25 @@ func buildCommand(cfg *BridgeConfig) string {
 func New(cfg *BridgeConfig) (*Bridge, error) {
 	command := buildCommand(cfg)
 
+	captureInterval := cfg.CaptureInterval
+	if captureInterval < 500*time.Millisecond {
+		captureInterval = 500 * time.Millisecond
+	}
+	if captureInterval > 60*time.Second {
+		captureInterval = 60 * time.Second
+	}
+
+	sendTimeout := cfg.SendTimeout
+	if sendTimeout < 1*time.Second {
+		sendTimeout = 1 * time.Second
+	}
+	if sendTimeout > 120*time.Second {
+		sendTimeout = 120 * time.Second
+	}
+
 	b := &Bridge{
-		captureInterval:   cfg.CaptureInterval,
-		sendTimeout:       cfg.SendTimeout,
+		captureInterval:   captureInterval,
+		sendTimeout:       sendTimeout,
 		historyLines:      cfg.TMUXHistoryLines,
 		interruptDebounce: 500 * time.Millisecond,
 		noisePatterns:     cfg.NoisePatterns,

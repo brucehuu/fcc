@@ -160,6 +160,7 @@ func startFCC() error {
 	}
 
 	// 打开日志文件，把 fcc 的 stderr 重定向过来，方便排查启动失败
+	_ = os.MkdirAll("log", 0755)
 	logFile, err := os.OpenFile("log/fcc-restart.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		logFile = os.Stderr
@@ -221,8 +222,10 @@ func Reset() {
 	killFromPIDFile(watchdogPidFile)
 	killFromPIDFile(fccPidFile)
 
-	// 2. 兜底：pkill -9 -x fcc 杀掉所有叫 fcc 的进程（防止有漏网的）
-	_ = exec.Command("pkill", "-9", "-x", "fcc").Run()
+	// 2. 兜底：杀掉从当前可执行文件路径启动的所有 fcc 进程（防止有漏网的）
+	if exe, err := os.Executable(); err == nil {
+		_ = exec.Command("pkill", "-9", "-f", exe).Run()
+	}
 
 	// 3. 清理残留的 tmux 会话
 	_ = exec.Command("tmux", "kill-session", "-t", "fcc").Run()

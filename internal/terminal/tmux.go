@@ -31,8 +31,8 @@ func (t *TmuxSession) Start(command, workDir string) error {
 	if workDir != "" {
 		args = append(args, "-c", workDir)
 	}
-	// 把命令字符串拆分为多个参数，避免单参数传给 shell 导致解析问题
-	cmdParts := strings.Fields(command)
+	// 把命令字符串拆分为多个参数，支持双引号/单引号包裹的带空格参数
+	cmdParts := splitCommand(command)
 	args = append(args, cmdParts...)
 	cmd := exec.Command("tmux", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -144,4 +144,50 @@ func (t *TmuxSession) Kill() error {
 	}
 	cmd := exec.Command("tmux", "kill-session", "-t", t.session)
 	return cmd.Run()
+}
+
+// splitCommand 把命令字符串按空格拆分为参数，支持双引号/单引号包裹的带空格参数和反斜杠转义。
+func splitCommand(command string) []string {
+	var args []string
+	var current strings.Builder
+	inQuote := false
+	var quoteChar rune
+	escaped := false
+
+	for _, r := range command {
+		if escaped {
+			current.WriteRune(r)
+			escaped = false
+			continue
+		}
+
+		switch {
+		case r == '\\':
+			escaped = true
+		case !inQuote && (r == '"' || r == '\''):
+			inQuote = true
+			quoteChar = r
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		case inQuote && r == quoteChar:
+			inQuote = false
+			args = append(args, current.String())
+			current.Reset()
+		case !inQuote && (r == ' ' || r == '\t'):
+			if current.Len() > 0 {
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(r)
+		}
+	}
+
+	if current.Len() > 0 || inQuote {
+		args = append(args, current.String())
+	}
+
+	return args
 }
