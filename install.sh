@@ -31,11 +31,11 @@ TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
 echo "Downloading fcc (${ARCH})..."
-curl -fsSL "$DOWNLOAD_URL" -o "$TMPDIR/fcc"
-curl -fsSL "$SHA_URL" -o "$TMPDIR/fcc.sha256"
+curl -fsSL "$DOWNLOAD_URL" -o "$TMPDIR/$ASSET"
+curl -fsSL "$SHA_URL" -o "$TMPDIR/$ASSET.sha256"
 
 cd "$TMPDIR"
-shasum -a 256 -c fcc.sha256
+shasum -a 256 -c "$ASSET.sha256"
 
 INSTALL_DIR="/usr/local/bin"
 if [ ! -w "$INSTALL_DIR" ]; then
@@ -43,8 +43,8 @@ if [ ! -w "$INSTALL_DIR" ]; then
     mkdir -p "$INSTALL_DIR"
 fi
 
-chmod +x "$TMPDIR/fcc"
-mv "$TMPDIR/fcc" "$INSTALL_DIR/fcc"
+chmod +x "$TMPDIR/$ASSET"
+mv "$TMPDIR/$ASSET" "$INSTALL_DIR/fcc"
 
 echo ""
 echo "fcc installed to $INSTALL_DIR/fcc"
