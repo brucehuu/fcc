@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"feishu-connect/internal/config"
+	"feishu-connect/internal/updater"
 	webview "github.com/webview/webview_go"
 )
 
@@ -20,10 +21,12 @@ var (
 )
 
 const (
-	configWindowTitle = "fcc — Config"
-	configWidth       = 480
-	configHeight      = 520
-	configWindowFlag  = "--config-window"
+	configWindowTitle     = "fcc — Config"
+	firstRunWindowTitle   = "fcc — First Run Setup"
+	configWidth           = 520
+	configHeight          = 620
+	configWindowFlag      = "--config-window"
+	firstRunWindowFlag    = "--first-run"
 )
 
 // OpenConfig spawns a helper subprocess to host the config webview. The
@@ -58,13 +61,17 @@ func OpenConfig() {
 
 // RunConfigWindow is the entry point for the --config-window helper mode.
 // It runs the webview in its own main thread and exits when the window closes.
-func RunConfigWindow(iconPNG []byte) {
+func RunConfigWindow(iconPNG []byte, firstRun bool) {
 	w := webview.New(false)
 	defer w.Destroy()
 	if len(iconPNG) > 0 {
 		SetAppIcon(iconPNG)
 	}
-	w.SetTitle(configWindowTitle)
+	if firstRun {
+		w.SetTitle(firstRunWindowTitle)
+	} else {
+		w.SetTitle(configWindowTitle)
+	}
 	w.SetSize(configWidth, configHeight, webview.HintFixed)
 	w.SetHtml(configHTML())
 
@@ -87,11 +94,67 @@ func RunConfigWindow(iconPNG []byte) {
 		}
 	})
 
+	w.Bind("getUpdateStatus", func() map[string]interface{} {
+		state, err := updater.LoadState()
+		if err != nil {
+			return map[string]interface{}{"error": err.Error()}
+		}
+		return map[string]interface{}{
+			"currentVersion": state.CurrentVersion,
+			"latestVersion":  state.LatestVersion,
+			"status":         state.Status,
+			"hasUpdate":      state.Status == updater.StatusDownloaded && state.Path != "",
+		}
+	})
+
+	w.Bind("checkUpdate", func() map[string]interface{} {
+		state := updater.CheckNow("")
+		if state == nil {
+			return map[string]interface{}{"success": false, "error": "check failed"}
+		}
+		if state.Error != "" {
+			return map[string]interface{}{"success": false, "error": state.Error}
+		}
+		return map[string]interface{}{
+			"success":        true,
+			"currentVersion": state.CurrentVersion,
+			"latestVersion":  state.LatestVersion,
+			"hasUpdate":      state.Status == updater.StatusDownloaded && state.Path != "",
+			"status":         state.Status,
+		}
+	})
+
+	w.Bind("applyUpdate", func() map[string]interface{} {
+		state, err := updater.LoadState()
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": "load state: " + err.Error()}
+		}
+		if state.Status != updater.StatusDownloaded || state.Path == "" {
+			return map[string]interface{}{"success": false, "error": "no update available"}
+		}
+
+		// Replace the binary from the helper process.
+		if err := updater.ReplaceBinary(state.Path); err != nil {
+			return map[string]interface{}{"success": false, "error": "replace: " + err.Error()}
+		}
+
+		// Signal the main process to exit so watchdog restarts the new binary.
+		if err := updater.TriggerRestart(); err != nil {
+			return map[string]interface{}{"success": false, "error": "restart: " + err.Error()}
+		}
+		return map[string]interface{}{"success": true}
+	})
+
 	w.Bind("saveConfig", func(command string, bypass bool, appID, appSecret string) map[string]interface{} {
 		// 读取旧配置，判断 AI 工具配置是否变化（决定是否热重启 tmux）
 		oldCfg, _ := config.Load(".env")
-		oldTool := detectTool(oldCfg.Command)
-		tmuxChanged := oldTool != command || oldCfg.BypassPermissions != bypass
+		var oldTool string
+		var oldBypass bool
+		if oldCfg != nil {
+			oldTool = detectTool(oldCfg.Command)
+			oldBypass = oldCfg.BypassPermissions
+		}
+		tmuxChanged := oldTool != command || oldBypass != bypass
 
 		if err := config.UpdateCommand(".env", command); err != nil {
 			return map[string]interface{}{"success": false, "error": err.Error()}
@@ -108,6 +171,15 @@ func RunConfigWindow(iconPNG []byte) {
 			if err := config.UpdateAppSecret(".env", appSecret); err != nil {
 				return map[string]interface{}{"success": false, "error": err.Error()}
 			}
+		}
+
+		if firstRun {
+			if appID == "" || appSecret == "" {
+				return map[string]interface{}{"success": false, "error": "App ID and App Secret are required"}
+			}
+			// First-run: exit the helper so main process can reload config.
+			go w.Terminate()
+			return map[string]interface{}{"success": true}
 		}
 
 		if tmuxChanged {
@@ -228,6 +300,26 @@ func configHTML() string {
       color: #999;
       margin-top: 4px;
     }
+    .divider {
+      height: 1px;
+      background: #ddd;
+      margin: 20px 0;
+    }
+    .update-section {
+      margin-top: 4px;
+    }
+    .update-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: #555;
+      margin-bottom: 6px;
+    }
+    .update-info {
+      font-size: 13px;
+      color: #333;
+    }
+    .update-info.uptodate { color: #28a745; }
+    .update-info.error { color: #dc3545; }
   </style>
 </head>
 <body>
@@ -269,6 +361,17 @@ func configHTML() string {
 
   <button id="saveBtn" onclick="doSave()">Save &amp; Apply</button>
   <div id="status"></div>
+
+  <div class="divider"></div>
+
+  <div class="update-section">
+    <div class="update-label">Version</div>
+    <div id="updateInfo" class="update-info">Checking...</div>
+    <div class="update-actions" style="display:flex; gap:8px; margin-top:8px;">
+      <button id="checkBtn" onclick="doCheckUpdate()" style="flex:1; margin-top:0;">Check for Updates</button>
+      <button id="updateBtn" onclick="doUpdate()" style="display:none; flex:1; margin-top:0;">Restart to Update</button>
+    </div>
+  </div>
 
   <script>
     const $ = id => document.getElementById(id);
@@ -314,6 +417,97 @@ func configHTML() string {
         updateBypassVisibility();
       } catch (e) {
         setStatus('Load failed: ' + e.message, true);
+      }
+      loadUpdateStatus();
+    }
+
+    async function loadUpdateStatus() {
+      try {
+        const s = await window.getUpdateStatus();
+        const infoEl = $('updateInfo');
+        const btnEl = $('updateBtn');
+        if (s.error) {
+          infoEl.textContent = 'Update check failed';
+          infoEl.className = 'update-info error';
+          btnEl.style.display = 'none';
+          return;
+        }
+        if (s.hasUpdate) {
+          infoEl.textContent = s.currentVersion + ' → ' + s.latestVersion + ' available';
+          infoEl.className = 'update-info';
+          btnEl.textContent = 'Restart to Update v' + s.latestVersion;
+          btnEl.style.display = '';
+        } else if (s.status === 'uptodate') {
+          infoEl.textContent = 'v' + s.currentVersion + ' — up to date';
+          infoEl.className = 'update-info uptodate';
+          btnEl.style.display = 'none';
+        } else if (s.status === 'checking' || s.status === 'downloading') {
+          infoEl.textContent = 'Checking for updates...';
+          infoEl.className = 'update-info';
+          btnEl.style.display = 'none';
+        } else {
+          infoEl.textContent = 'v' + (s.currentVersion || 'unknown');
+          infoEl.className = 'update-info';
+          btnEl.style.display = 'none';
+        }
+      } catch (e) {
+        $('updateInfo').textContent = 'Update check failed';
+        $('updateInfo').className = 'update-info error';
+        $('updateBtn').style.display = 'none';
+      }
+    }
+
+    async function doCheckUpdate() {
+      const btn = $('checkBtn');
+      const infoEl = $('updateInfo');
+      btn.disabled = true;
+      btn.textContent = 'Checking...';
+      try {
+        const res = await window.checkUpdate();
+        if (res.success) {
+          if (res.hasUpdate) {
+            infoEl.textContent = res.currentVersion + ' → ' + res.latestVersion + ' available';
+            infoEl.className = 'update-info';
+            $('updateBtn').textContent = 'Restart to Update v' + res.latestVersion;
+            $('updateBtn').style.display = '';
+          } else if (res.status === 'uptodate') {
+            infoEl.textContent = 'v' + res.currentVersion + ' — up to date';
+            infoEl.className = 'update-info uptodate';
+            $('updateBtn').style.display = 'none';
+          } else {
+            infoEl.textContent = 'v' + (res.currentVersion || 'unknown');
+            infoEl.className = 'update-info';
+            $('updateBtn').style.display = 'none';
+          }
+          btn.textContent = 'Check for Updates';
+        } else {
+          infoEl.textContent = 'Check failed: ' + (res.error || 'unknown');
+          infoEl.className = 'update-info error';
+          btn.textContent = 'Check for Updates';
+        }
+      } catch (e) {
+        infoEl.textContent = 'Check failed: ' + e.message;
+        infoEl.className = 'update-info error';
+        btn.textContent = 'Check for Updates';
+      }
+      btn.disabled = false;
+    }
+
+    async function doUpdate() {
+      const btn = $('updateBtn');
+      btn.disabled = true;
+      btn.textContent = 'Updating...';
+      try {
+        const res = await window.applyUpdate();
+        if (res.success) {
+          btn.textContent = 'Restarting...';
+        } else {
+          btn.textContent = 'Update failed: ' + (res.error || 'unknown');
+          btn.disabled = false;
+        }
+      } catch (e) {
+        btn.textContent = 'Update failed: ' + e.message;
+        btn.disabled = false;
       }
     }
 

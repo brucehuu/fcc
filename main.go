@@ -16,13 +16,14 @@ import (
 	"feishu-connect/internal/config"
 	"feishu-connect/internal/log"
 	"feishu-connect/internal/tray"
+	"feishu-connect/internal/updater"
 	"feishu-connect/internal/watchdog"
 )
 
 //go:embed assets/fcc-logo.png
 var appIconPNG []byte
 
-const version = "0.0.1"
+var version = "dev"
 
 func processIcon(src []byte) []byte {
 	icon := src
@@ -36,6 +37,18 @@ func processIcon(src []byte) []byte {
 		icon = rounded
 	}
 	return icon
+}
+
+func runFirstRunSetup() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("get executable: %w", err)
+	}
+	cmd := exec.Command(exe, "--first-run")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
 
 func isFCCRunning() bool {
@@ -57,11 +70,16 @@ func isFCCRunning() bool {
 }
 
 func main() {
-	// --config-window 模式：helper 子进程跑 webview 配置窗口。
+	// --config-window / --first-run 模式：helper 子进程跑 webview 配置窗口。
 	// 需要在 Dock 显示 fcc 图标，所以提前处理图标并传给 RunConfigWindow。
 	if len(os.Args) > 1 && os.Args[1] == "--config-window" {
 		iconPNG := processIcon(appIconPNG)
-		tray.RunConfigWindow(iconPNG)
+		tray.RunConfigWindow(iconPNG, false)
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "--first-run" {
+		iconPNG := processIcon(appIconPNG)
+		tray.RunConfigWindow(iconPNG, true)
 		return
 	}
 
@@ -111,8 +129,17 @@ func main() {
 
 	cfg, err := config.Load(".env")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		os.Exit(1)
+		log.Infof("[main] config missing or incomplete, opening first-run setup window...")
+		if err := runFirstRunSetup(); err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+			os.Exit(1)
+		}
+		// Reload config after setup window closes.
+		cfg, err = config.Load(".env")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to load config after setup: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	log.SetLevel(cfg.LogLevel)
 
@@ -157,6 +184,10 @@ func main() {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// 启动后台更新检查器
+	up := updater.New(version)
+	go up.Start(ctx)
 
 	// 信号触发：发信号时调 tray.Stop() 让 NSApp 走 terminate 流程，
 	// 然后 cfg.OnExit 会清理 tmux + cancel。**不动 watchdog**——
