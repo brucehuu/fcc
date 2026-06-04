@@ -148,6 +148,9 @@ func isFCCRunning() bool {
 	return processExists(pid)
 }
 
+// IsFCCRunning returns true if the fcc main process is currently running.
+func IsFCCRunning() bool { return isFCCRunning() }
+
 func startFCC() error {
 	exe, err := os.Executable()
 	if err != nil {
@@ -164,6 +167,8 @@ func startFCC() error {
 	logFile, err := os.OpenFile("log/fcc-restart.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		logFile = os.Stderr
+	} else {
+		defer logFile.Close()
 	}
 
 	// 清理可能残留的 tmux 会话，否则 fcc 启动会因会话已存在而失败

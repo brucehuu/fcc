@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ type Updater struct {
 	currentVersion string
 	httpClient     *http.Client
 	state          *State
+	mu             sync.RWMutex
 }
 
 // New creates an updater for the given current version.
@@ -56,7 +58,9 @@ func (u *Updater) checkAndDownload(ctx context.Context) {
 		return
 	}
 	result := CheckNow(u.currentVersion)
+	u.mu.Lock()
 	u.state = result
+	u.mu.Unlock()
 }
 
 // CheckNow performs an immediate version check and download.
@@ -137,14 +141,22 @@ func CheckNow(currentVersion string) *State {
 
 // State returns the current update state (safe for concurrent read).
 func (u *Updater) State() *State {
-	if u.state == nil {
-		s, _ := LoadState()
-		if s == nil {
-			s = &State{CurrentVersion: u.currentVersion, Status: StatusIdle}
-		}
-		u.state = s
+	u.mu.RLock()
+	s := u.state
+	u.mu.RUnlock()
+	if s != nil {
+		cp := *s
+		return &cp
 	}
-	return u.state
+	s, _ = LoadState()
+	if s == nil {
+		s = &State{CurrentVersion: u.currentVersion, Status: StatusIdle}
+	}
+	u.mu.Lock()
+	u.state = s
+	u.mu.Unlock()
+	cp := *s
+	return &cp
 }
 
 // HasUpdate returns true if a downloaded update is waiting to be applied.

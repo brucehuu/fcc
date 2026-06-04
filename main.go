@@ -25,6 +25,11 @@ var appIconPNG []byte
 
 var version = "dev"
 
+const (
+	configWindowFlag = "--config-window"
+	firstRunFlag     = "--first-run"
+)
+
 func processIcon(src []byte) []byte {
 	icon := src
 	if padded, ok := tray.AddIconPadding(icon, 18); ok {
@@ -48,33 +53,15 @@ func runFirstRunSetup() error {
 	return cmd.Run()
 }
 
-func isFCCRunning() bool {
-	data, err := os.ReadFile("/tmp/fcc.pid")
-	if err != nil {
-		return false
-	}
-	var pid int
-	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
-		return false
-	}
-	out, err := exec.Command("ps", "-p", fmt.Sprintf("%d", pid), "-o", "pid=").Output()
-	if err != nil {
-		return false
-	}
-	var found int
-	_, err = fmt.Sscanf(string(out), "%d", &found)
-	return err == nil && found == pid
-}
-
 func main() {
 	// --config-window / --first-run 模式：helper 子进程跑 webview 配置窗口。
 	// 需要在 Dock 显示 fcc 图标，所以提前处理图标并传给 RunConfigWindow。
-	if len(os.Args) > 1 && os.Args[1] == "--config-window" {
+	if len(os.Args) > 1 && os.Args[1] == configWindowFlag {
 		iconPNG := processIcon(appIconPNG)
 		tray.RunConfigWindow(iconPNG, false, version)
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "--first-run" {
+	if len(os.Args) > 1 && os.Args[1] == firstRunFlag {
 		iconPNG := processIcon(appIconPNG)
 		tray.RunConfigWindow(iconPNG, true, version)
 		return

@@ -21,12 +21,11 @@ var (
 )
 
 const (
-	configWindowTitle     = "fcc — Config"
-	firstRunWindowTitle   = "fcc — First Run Setup"
-	configWidth           = 520
-	configHeight          = 620
-	configWindowFlag      = "--config-window"
-	firstRunWindowFlag    = "--first-run"
+	configWindowTitle   = "fcc — Config"
+	firstRunWindowTitle = "fcc — First Run Setup"
+	configWidth         = 520
+	configHeight        = 620
+	configWindowFlag    = "--config-window"
 )
 
 // OpenConfig spawns a helper subprocess to host the config webview. The
