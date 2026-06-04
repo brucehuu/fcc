@@ -14,7 +14,7 @@ import (
 const (
 	watchdogPidFile = "/tmp/fcc-watchdog.pid"
 	fccPidFile      = "/tmp/fcc.pid"
-	checkInterval   = 3 * time.Minute
+	checkInterval   = 1 * time.Minute
 )
 
 // ForkIfNeeded 检查是否已有 watchdog 在运行，没有则 fork 一个。
@@ -236,6 +236,39 @@ func Reset() {
 	time.Sleep(1 * time.Second)
 
 	log.Info("[watchdog] reset done")
+}
+
+// Stop 终止 watchdog 进程，让 fcc 退出后不会被自动拉起。
+// 用户主动 Quit fcc 时调用：先发 SIGTERM 等最多 1 秒，再清 PID 文件。
+// 幂等：watchdog 不在时安全返回。
+func Stop() {
+	data, err := os.ReadFile(watchdogPidFile)
+	if err != nil {
+		return
+	}
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err != nil {
+		return
+	}
+	if !processExists(pid) {
+		_ = os.Remove(watchdogPidFile)
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		log.Warnf("[watchdog] stop: signal: %v", err)
+	}
+	for i := 0; i < 20; i++ {
+		if !processExists(pid) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	_ = os.Remove(watchdogPidFile)
+	log.Info("[watchdog] stopped")
 }
 
 // killFromPIDFile 读取 PID 文件，发送 SIGTERM 信号。如果进程不存在则跳过。
