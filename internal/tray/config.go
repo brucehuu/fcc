@@ -28,7 +28,7 @@ const (
 	configWindowTitle   = "fcc — Config"
 	firstRunWindowTitle = "fcc — First Run Setup"
 	configWidth         = 520
-	configHeight        = 620
+	configHeight        = 640
 	configWindowFlag    = "--config-window"
 )
 
@@ -114,6 +114,7 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 			"bypassPermissions": cfg.BypassPermissions,
 			"appID":             cfg.AppID,
 			"appSecret":         cfg.AppSecret,
+			"targetName":        cfg.TargetName,
 		}
 	})
 
@@ -157,7 +158,7 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 		return map[string]interface{}{"success": true}
 	})
 
-	w.Bind("saveConfig", func(tool, command string, bypass bool, appID, appSecret string) map[string]interface{} {
+	w.Bind("saveConfig", func(tool, command string, bypass bool, appID, appSecret, targetName string) map[string]interface{} {
 		// Read the old config to decide whether tmux needs to be restarted.
 		oldCfg, _ := config.Load(".env")
 		var oldCommand string
@@ -186,6 +187,9 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 		if appSecret != "" {
 			updates["LARK_APP_SECRET"] = appSecret
 		}
+		if targetName != "" {
+			updates["TARGET_NAME"] = targetName
+		}
 		if err := config.UpdateEnvVars(".env", updates); err != nil {
 			return map[string]interface{}{"success": false, "error": err.Error()}
 		}
@@ -209,6 +213,13 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 		}
 
 		return map[string]interface{}{"success": true, "tmuxChanged": tmuxChanged}
+	})
+
+	w.Bind("updateConfig", func(updates map[string]string) map[string]interface{} {
+		if err := config.UpdateEnvVars(".env", updates); err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
+		return map[string]interface{}{"success": true}
 	})
 
 	w.Bind("testMessage", func(appID, appSecret, targetName string) map[string]interface{} {
@@ -310,12 +321,41 @@ func configHTML() string {
     * { box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
-      padding: 28px 24px;
+      padding: 20px 24px 28px;
       color: #333;
       background: #fafafa;
       margin: 0;
     }
-    h1 { font-size: 16px; font-weight: 600; margin: 0 0 20px; color: #222; }
+    h1 { font-size: 16px; font-weight: 600; margin: 0 0 16px; color: #222; }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid #ddd;
+    }
+    .tab-btn {
+      flex: 1;
+      padding: 8px 4px;
+      border: none;
+      background: transparent;
+      color: #666;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin: 0 0 -1px;
+      border-radius: 0;
+      -webkit-appearance: none;
+    }
+    .tab-btn:hover {
+      background: #f0f0f0;
+    }
+    .tab-btn.active {
+      color: #007aff;
+      border-bottom-color: #007aff;
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
     .field { margin-bottom: 16px; }
     label {
       display: block;
@@ -335,18 +375,13 @@ func configHTML() string {
       outline: none;
     }
     select:focus, input[type="text"]:focus, input[type="password"]:focus { border-color: #007aff; }
-    select:focus { border-color: #007aff; }
-    .secret-wrap {
-      position: relative;
-    }
-    .secret-wrap input {
-      padding-right: 36px;
-    }
+    .secret-wrap { position: relative; }
+    .secret-wrap input { padding-right: 36px; }
     .eye-btn {
       position: absolute;
       right: 6px;
-      top: 30%;
-      transform: translateY(-50%);
+      top: 50%;
+      transform: translateY(-80%);
       width: 28px;
       height: 28px;
       padding: 0;
@@ -391,26 +426,19 @@ func configHTML() string {
       font-weight: 400;
       cursor: pointer;
     }
-    #status {
+    .tab-status {
       margin-top: 12px;
       font-size: 12px;
       min-height: 18px;
     }
-    #status.success { color: #28a745; }
-    #status.error { color: #dc3545; }
+    .tab-status.success { color: #28a745; }
+    .tab-status.error { color: #dc3545; }
     .hint {
       font-size: 11px;
       color: #999;
       margin-top: 4px;
     }
-    .divider {
-      height: 1px;
-      background: #ddd;
-      margin: 20px 0;
-    }
-    .update-section {
-      margin-top: 4px;
-    }
+    .update-section { margin-top: 4px; }
     .update-label {
       font-size: 12px;
       font-weight: 500;
@@ -423,78 +451,108 @@ func configHTML() string {
     }
     .update-info.uptodate { color: #28a745; }
     .update-info.error { color: #dc3545; }
+    .update-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .update-actions button {
+      flex: 1;
+      margin-top: 0;
+    }
   </style>
 </head>
 <body>
   <h1>fcc Configuration</h1>
 
-  <div class="field">
-    <label for="appID">Lark App ID</label>
-    <input type="text" id="appID" placeholder="cli_xxxxxxxxxxxxx">
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="feishu" onclick="switchTab('feishu')">飞书配置</button>
+    <button class="tab-btn" data-tab="ai-tool" onclick="switchTab('ai-tool')">AI Tool配置</button>
+    <button class="tab-btn" data-tab="version" onclick="switchTab('version')">版本管理</button>
   </div>
 
-  <div class="field">
-    <label for="appSecret">Lark App Secret</label>
-    <div class="secret-wrap">
-      <input type="password" id="appSecret" placeholder="xxxxxxxxxxxxxxxxxxxxxx">
-      <button type="button" class="eye-btn" id="eyeBtn" onclick="toggleSecret()">
-        <svg id="eyeIcon" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
-      </button>
+  <div class="tab-content active" id="tab-feishu">
+    <div class="field">
+      <label for="appID">Lark App ID</label>
+      <input type="text" id="appID" placeholder="cli_xxxxxxxxxxxxx">
     </div>
-    <div class="hint">Leave blank to keep current value.</div>
-    <div class="field" style="margin-top:10px; margin-bottom:0;">
+
+    <div class="field">
+      <label for="appSecret">Lark App Secret</label>
+      <div class="secret-wrap">
+        <input type="password" id="appSecret" placeholder="xxxxxxxxxxxxxxxxxxxxxx">
+        <button type="button" class="eye-btn" id="eyeBtn" onclick="toggleSecret()">
+          <svg id="eyeIcon" viewBox="0 0 24 24"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="field">
       <label for="targetName">Feishu Account Name</label>
       <input type="text" id="targetName" placeholder="Enter name to send test message to">
+      <button id="testBtn" onclick="doTestMessage()" style="background:#34c759; margin-top:10px;">Test Message</button>
+      <div id="testStatus" style="margin-top:6px; font-size:12px; min-height:18px;"></div>
     </div>
-    <button id="testBtn" onclick="doTestMessage()" style="background:#34c759; margin-top:10px;">Test Message</button>
-    <div id="testStatus" style="margin-top:6px; font-size:12px; min-height:18px;"></div>
+
+    <div class="tab-status" id="status-feishu"></div>
   </div>
 
-  <div class="field">
-    <label for="command">AI Tool</label>
-    <select id="command">
-      <option value="claude">Claude</option>
-      <option value="codex">Codex</option>
-      <option value="opencode">OpenCode</option>
-      <option value="custom">Custom</option>
-    </select>
-    <div class="hint">The terminal command to bridge via tmux.</div>
-  </div>
-
-  <div class="field" id="customCommandField" style="display:none;">
-    <label for="customCommand">Command</label>
-    <input type="text" id="customCommand" placeholder="bash -il">
-  </div>
-
-  <div class="field" id="bypassField">
-    <div class="checkbox-wrap">
-      <input type="checkbox" id="bypass">
-      <label for="bypass">Bypass Permissions</label>
+  <div class="tab-content" id="tab-ai-tool">
+    <div class="field">
+      <label for="command">AI Tool</label>
+      <select id="command">
+        <option value="claude">Claude</option>
+        <option value="codex">Codex</option>
+        <option value="opencode">OpenCode</option>
+        <option value="custom">Custom</option>
+      </select>
+      <div class="hint">The terminal command to bridge via tmux.</div>
     </div>
-    <div class="hint">Skip all permission confirmation prompts (dangerous).</div>
+
+    <div class="field" id="customCommandField" style="display:none;">
+      <label for="customCommand">Command</label>
+      <input type="text" id="customCommand" placeholder="bash -il">
+    </div>
+
+    <div class="field" id="bypassField">
+      <div class="checkbox-wrap">
+        <input type="checkbox" id="bypass">
+        <label for="bypass">Bypass Permissions</label>
+      </div>
+      <div class="hint">Skip all permission confirmation prompts (dangerous).</div>
+    </div>
+
+    <div class="tab-status" id="status-ai-tool"></div>
   </div>
 
-  <button id="saveBtn" onclick="doSave()">Save &amp; Apply</button>
-  <div id="status"></div>
-
-  <div class="divider"></div>
-
-  <div class="update-section">
-    <div class="update-label">Version</div>
-    <div id="updateInfo" class="update-info">Checking...</div>
-    <div class="update-actions" style="display:flex; gap:8px; margin-top:8px;">
-      <button id="checkBtn" onclick="doCheckUpdate()" style="flex:1; margin-top:0;">Check for Updates</button>
-      <button id="updateBtn" onclick="doUpdate()" style="display:none; flex:1; margin-top:0;">Restart to Update</button>
+  <div class="tab-content" id="tab-version">
+    <div class="update-section">
+      <div class="update-label">Version</div>
+      <div id="updateInfo" class="update-info">Checking...</div>
+      <div class="update-actions">
+        <button id="checkBtn" onclick="doCheckUpdate()">Check for Updates</button>
+        <button id="updateBtn" onclick="doUpdate()" style="display:none;">Restart to Update</button>
+      </div>
     </div>
   </div>
 
   <script>
     const $ = id => document.getElementById(id);
-    const statusEl = $('status');
 
     function setStatus(text, isError) {
-      statusEl.textContent = text;
-      statusEl.className = isError ? 'error' : 'success';
+      const activeTab = document.querySelector('.tab-content.active');
+      const statusEl = activeTab ? activeTab.querySelector('.tab-status') : null;
+      if (statusEl) {
+        statusEl.textContent = text;
+        statusEl.className = 'tab-status ' + (isError ? 'error' : 'success');
+      }
+    }
+
+    function switchTab(tab) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+      document.querySelector('.tab-btn[data-tab="' + tab + '"]').classList.add('active');
+      $('tab-' + tab).classList.add('active');
     }
 
     function toggleSecret() {
@@ -530,6 +588,7 @@ func configHTML() string {
         }
         $('appID').value = cfg.appID || '';
         $('appSecret').value = cfg.appSecret || '';
+        $('targetName').value = cfg.targetName || '';
         $('command').value = cfg.tool || 'claude';
         $('customCommand').value = cfg.command || '';
         $('bypass').checked = !!cfg.bypassPermissions;
@@ -587,7 +646,6 @@ func configHTML() string {
 
       try {
         await window.checkUpdate();
-        // Poll every 2s until check completes or times out after 60s.
         let attempts = 0;
         const poll = setInterval(async () => {
           attempts++;
@@ -647,21 +705,16 @@ func configHTML() string {
       }
     }
 
-    async function doSave() {
-      const btn = $('saveBtn');
-      btn.disabled = true;
+    async function saveEnv(key, value) {
       setStatus('Saving...');
       try {
-        const tool = $('command').value;
-        const cmd = tool === 'custom' ? $('customCommand').value.trim() : tool;
-        const bypass = (tool === 'opencode' || tool === 'custom') ? false : $('bypass').checked;
-        const appID = $('appID').value.trim();
-        const appSecret = $('appSecret').value.trim();
-        const res = await window.saveConfig(tool, cmd, bypass, appID, appSecret);
+        const updates = {[key]: value};
+        const res = await window.updateConfig(updates);
         if (res.success) {
           let msg = 'Saved.';
-          if (res.tmuxChanged) msg += ' Tmux restarted automatically.';
-          if (appID || appSecret) msg += ' Restart fcc to apply Lark credentials.';
+          if (key === 'LARK_APP_ID' || key === 'LARK_APP_SECRET') {
+            msg += ' Restart fcc to apply Lark credentials.';
+          }
           setStatus(msg, false);
         } else {
           setStatus('Save failed: ' + (res.error || 'unknown'), true);
@@ -669,7 +722,25 @@ func configHTML() string {
       } catch (e) {
         setStatus('Save failed: ' + e.message, true);
       }
-      btn.disabled = false;
+    }
+
+    async function saveAiTool() {
+      setStatus('Saving...');
+      try {
+        const tool = $('command').value;
+        const cmd = tool === 'custom' ? $('customCommand').value.trim() : tool;
+        const bypass = (tool === 'opencode' || tool === 'custom') ? false : $('bypass').checked;
+        const res = await window.saveConfig(tool, cmd, bypass, '', '', '');
+        if (res.success) {
+          let msg = 'Saved.';
+          if (res.tmuxChanged) msg += ' Tmux restarted automatically.';
+          setStatus(msg, false);
+        } else {
+          setStatus('Save failed: ' + (res.error || 'unknown'), true);
+        }
+      } catch (e) {
+        setStatus('Save failed: ' + e.message, true);
+      }
     }
 
     async function doTestMessage() {
@@ -703,7 +774,15 @@ func configHTML() string {
       }
     }
 
-    $('command').addEventListener('change', updateBypassVisibility);
+    $('command').addEventListener('change', () => {
+      updateBypassVisibility();
+      saveAiTool();
+    });
+    $('appID').addEventListener('change', () => saveEnv('LARK_APP_ID', $('appID').value.trim()));
+    $('appSecret').addEventListener('change', () => saveEnv('LARK_APP_SECRET', $('appSecret').value.trim()));
+    $('customCommand').addEventListener('change', saveAiTool);
+    $('targetName').addEventListener('change', () => saveEnv('TARGET_NAME', $('targetName').value.trim()));
+    $('bypass').addEventListener('change', saveAiTool);
     load();
   </script>
 </body>

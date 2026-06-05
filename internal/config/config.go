@@ -16,6 +16,7 @@ type Config struct {
 	AppSecret         string
 	Command           string
 	BypassPermissions bool
+	TargetName        string
 	CodexQueueMode    string        // "guide" or "queue"
 	CaptureInterval   time.Duration // tmux 捕获间隔
 	SendTimeout       time.Duration // 单条消息发送超时
@@ -56,6 +57,7 @@ func parseEnv() (*Config, error) {
 	appID := os.Getenv("LARK_APP_ID")
 	appSecret := os.Getenv("LARK_APP_SECRET")
 	command := os.Getenv("COMMAND")
+	targetName := strings.TrimSpace(os.Getenv("TARGET_NAME"))
 	bypass := strings.TrimSpace(os.Getenv("BYPASS_PERMISSIONS"))
 	codexMode := strings.ToLower(strings.TrimSpace(os.Getenv("CODEX_QUEUE_MODE")))
 	captureInterval := strings.TrimSpace(os.Getenv("CAPTURE_INTERVAL"))
@@ -104,6 +106,7 @@ func parseEnv() (*Config, error) {
 		AppSecret:         appSecret,
 		Command:           command,
 		BypassPermissions: strings.ToLower(bypass) == "true" || bypass == "1",
+		TargetName:        targetName,
 		CodexQueueMode:    codexMode,
 		CaptureInterval:   parseDuration(captureInterval, 3*time.Second),
 		SendTimeout:       parseDuration(sendTimeout, 10*time.Second),
