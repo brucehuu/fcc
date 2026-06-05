@@ -468,3 +468,99 @@ func (b *Bot) Close() {
 		b.wsClient.Close()
 	})
 }
+
+// SendWelcome 查找目标用户并发送欢迎消息。
+func (b *Bot) SendWelcome(ctx context.Context, targetName, text string) error {
+	targetName = strings.TrimSpace(targetName)
+	if targetName == "" {
+		return fmt.Errorf("target name is empty")
+	}
+	nameLower := strings.ToLower(targetName)
+
+	seen := make(map[string]bool)
+	var matchedOpenID string
+	matchCount := 0
+
+	chatPage := ""
+	for {
+		chatParams := map[string]interface{}{"page_size": 100}
+		if chatPage != "" {
+			chatParams["page_token"] = chatPage
+		}
+		chatResp, err := b.client.Get(ctx, "/open-apis/im/v1/chats", chatParams, larkcore.AccessTokenTypeTenant)
+		if err != nil {
+			return fmt.Errorf("list chats: %w", err)
+		}
+		var chatResult struct {
+			Code int `json:"code"`
+			Data struct {
+				Items     []struct{ ChatID string `json:"chat_id"` } `json:"items"`
+				HasMore   bool   `json:"has_more"`
+				PageToken string `json:"page_token"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(chatResp.RawBody, &chatResult); err != nil {
+			return err
+		}
+		if chatResult.Code != 0 {
+			return fmt.Errorf("list chats code %d", chatResult.Code)
+		}
+
+		for _, chat := range chatResult.Data.Items {
+			memberPage := ""
+			for {
+				memberParams := map[string]interface{}{"page_size": 100}
+				if memberPage != "" {
+					memberParams["page_token"] = memberPage
+				}
+				memberPath := fmt.Sprintf("/open-apis/im/v1/chats/%s/members", chat.ChatID)
+				memberResp, err := b.client.Get(ctx, memberPath, memberParams, larkcore.AccessTokenTypeTenant)
+				if err != nil {
+					break
+				}
+				var memberResult struct {
+					Code int `json:"code"`
+					Data struct {
+						Items     []struct {
+							MemberID string `json:"member_id"`
+							Name     string `json:"name"`
+						} `json:"items"`
+						HasMore   bool   `json:"has_more"`
+						PageToken string `json:"page_token"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal(memberResp.RawBody, &memberResult); err != nil {
+					break
+				}
+				if memberResult.Code != 0 {
+					break
+				}
+				for _, m := range memberResult.Data.Items {
+					if strings.Contains(strings.ToLower(m.Name), nameLower) && !seen[m.MemberID] {
+						seen[m.MemberID] = true
+						matchedOpenID = m.MemberID
+						matchCount++
+					}
+				}
+				if !memberResult.Data.HasMore {
+					break
+				}
+				memberPage = memberResult.Data.PageToken
+			}
+		}
+
+		if !chatResult.Data.HasMore {
+			break
+		}
+		chatPage = chatResult.Data.PageToken
+	}
+
+	if matchCount == 0 {
+		return fmt.Errorf("no member named '%s' found", targetName)
+	}
+	if matchCount > 1 {
+		return fmt.Errorf("found %d members matching '%s'", matchCount, targetName)
+	}
+
+	return b.SendText(ctx, "open_id", matchedOpenID, text)
+}

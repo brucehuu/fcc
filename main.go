@@ -159,6 +159,7 @@ func main() {
 		TMUXHistoryLines:  cfg.TMUXHistoryLines,
 		SendRetries:       cfg.SendRetries,
 		NoisePatterns:     cfg.NoisePatterns,
+		TargetName:        cfg.TargetName,
 	})
 	if err != nil {
 		log.Errorf("failed to create bridge: %v", err)

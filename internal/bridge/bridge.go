@@ -42,6 +42,7 @@ type BridgeConfig struct {
 	TMUXHistoryLines  int
 	SendRetries       int
 	NoisePatterns     []string
+	TargetName        string // 首次启动时发送欢迎消息的目标用户名称
 }
 
 type Bridge struct {
@@ -60,6 +61,8 @@ type Bridge struct {
 	closeOnce         sync.Once
 	noisePatterns     []string
 	metrics           bridgeMetrics
+	isClaude          bool   // 仅 Claude 命令启用装饰性状态行过滤
+	targetName        string // 首次启动欢迎消息的目标用户
 }
 
 // bridgeMetrics 轻量级运行时指标
@@ -117,6 +120,8 @@ func New(cfg *BridgeConfig) (*Bridge, error) {
 		historyLines:      cfg.TMUXHistoryLines,
 		interruptDebounce: 500 * time.Millisecond,
 		noisePatterns:     cfg.NoisePatterns,
+		isClaude:          isClaudeCommand(command),
+		targetName:        cfg.TargetName,
 	}
 	b.messenger = bot.New(cfg.AppID, cfg.AppSecret, b.handleMessage, cfg.SendRetries)
 
@@ -255,7 +260,7 @@ func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 // Start 启动后台 goroutine（飞书连接 + output capture），不 attach tmux
 // 返回的 err 始终是 ctx.Err()
 func (b *Bridge) Start(ctx context.Context) error {
-	b.wg.Add(3)
+	b.wg.Add(4)
 	go func() {
 		defer b.wg.Done()
 		if err := b.messenger.Start(ctx); err != nil {
@@ -269,6 +274,19 @@ func (b *Bridge) Start(ctx context.Context) error {
 	go func() {
 		defer b.wg.Done()
 		b.runImageCleanup(ctx)
+	}()
+	go func() {
+		defer b.wg.Done()
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(3 * time.Second):
+		}
+		if b.targetName != "" {
+			if err := b.messenger.SendWelcome(ctx, b.targetName, "FCC is coming..."); err != nil {
+				log.Warnf("[bridge] send welcome: %v", err)
+			}
+		}
 	}()
 
 	<-ctx.Done()
@@ -593,6 +611,10 @@ func (b *Bridge) isNoiseLine(line string) bool {
 	}
 	// Claude TUI 输入提示符 "> " 或 ">" 单独成行
 	if isTUIPrompt(line) {
+		return true
+	}
+	// 仅 Claude 命令：过滤 TUI 装饰性状态行（spinner、Thinking... 等）
+	if b.isClaude && isClaudeDecorativeLine(line) {
 		return true
 	}
 	return false
