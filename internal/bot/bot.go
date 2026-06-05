@@ -434,7 +434,7 @@ func (b *Bot) sendWithRetry(ctx context.Context, label string, fn func(ctx conte
 	return fmt.Errorf("%s failed after %d attempts: %w", label, b.maxRetries, lastErr)
 }
 
-// SendInteractiveTable 使用 interactive 卡片消息发送表格，通过 column_set 布局模拟表格
+// SendInteractiveTable 使用 interactive 卡片消息发送表格
 func (b *Bot) SendInteractiveTable(ctx context.Context, receiveIDType, receiveID, markdownTable string) error {
 	card, err := buildTableCard(markdownTable)
 	if err != nil {
@@ -477,9 +477,19 @@ func buildTableCard(markdownTable string) (map[string]interface{}, error) {
 	}
 	colCount := len(headers)
 
-	elements := []map[string]interface{}{
-		buildTableRow(headers, "grey"),
+	columns := make([]map[string]interface{}, colCount)
+	for i, header := range headers {
+		columns[i] = map[string]interface{}{
+			"name":             fmt.Sprintf("col_%d", i),
+			"display_name":     header,
+			"data_type":        "lark_md",
+			"horizontal_align": "left",
+			"vertical_align":   "top",
+			"width":            "auto",
+		}
 	}
+
+	rows := make([]map[string]interface{}, 0, len(lines)-2)
 
 	for i := 1; i < len(lines); i++ {
 		line := strings.TrimSpace(lines[i])
@@ -498,44 +508,36 @@ func buildTableCard(markdownTable string) (map[string]interface{}, error) {
 		} else if len(cells) > colCount {
 			cells = cells[:colCount]
 		}
-		elements = append(elements, buildTableRow(cells, "default"))
+		row := make(map[string]interface{}, colCount)
+		for j, cell := range cells {
+			row[fmt.Sprintf("col_%d", j)] = cell
+		}
+		rows = append(rows, row)
 	}
 
 	return map[string]interface{}{
 		"config": map[string]interface{}{
 			"wide_screen_mode": true,
 		},
-		"elements": elements,
-	}, nil
-}
-
-// buildTableRow 把一行单元格转成 column_set 元素
-func buildTableRow(cells []string, bgStyle string) map[string]interface{} {
-	cols := make([]map[string]interface{}, len(cells))
-	for i, c := range cells {
-		cols[i] = map[string]interface{}{
-			"tag":   "column",
-			"width": "weighted",
-			"weight": 1,
-			"elements": []map[string]interface{}{
-				{
-					"tag": "div",
-					"text": map[string]interface{}{
-						"tag":     "lark_md",
-						"content": c,
-					},
+		"elements": []map[string]interface{}{
+			{
+				"tag":                 "table",
+				"page_size":           min(max(len(rows), 1), 10),
+				"row_height":          "high",
+				"freeze_first_column": false,
+				"header_style": map[string]interface{}{
+					"text_align":       "left",
+					"text_size":        "normal",
+					"background_style": "grey",
+					"text_color":       "default",
+					"bold":             true,
+					"lines":            1,
 				},
+				"columns": columns,
+				"rows":    rows,
 			},
-			"vertical_align": "center",
-		}
-	}
-	return map[string]interface{}{
-		"tag":                "column_set",
-		"flex_mode":          "none",
-		"background_style":   bgStyle,
-		"horizontal_spacing": "small",
-		"columns":            cols,
-	}
+		},
+	}, nil
 }
 
 func parseMarkdownTableCells(line string) []string {
@@ -600,7 +602,9 @@ func (b *Bot) SendWelcome(ctx context.Context, targetName, text string) error {
 		var chatResult struct {
 			Code int `json:"code"`
 			Data struct {
-				Items     []struct{ ChatID string `json:"chat_id"` } `json:"items"`
+				Items []struct {
+					ChatID string `json:"chat_id"`
+				} `json:"items"`
 				HasMore   bool   `json:"has_more"`
 				PageToken string `json:"page_token"`
 			} `json:"data"`
@@ -627,7 +631,7 @@ func (b *Bot) SendWelcome(ctx context.Context, targetName, text string) error {
 				var memberResult struct {
 					Code int `json:"code"`
 					Data struct {
-						Items     []struct {
+						Items []struct {
 							MemberID string `json:"member_id"`
 							Name     string `json:"name"`
 						} `json:"items"`

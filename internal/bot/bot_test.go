@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -39,8 +40,8 @@ func TestIsSeparatorLine(t *testing.T) {
 		{"| --- | --- |", true},
 		{"| :--- | ---: |", true},
 		{"| :---: |", true},
-		{"| -- |", false},    // too short
-		{"| -+- |", false},   // invalid chars
+		{"| -- |", false},  // too short
+		{"| -+- |", false}, // invalid chars
 		{"hello", false},
 		{"", false},
 	}
@@ -52,43 +53,18 @@ func TestIsSeparatorLine(t *testing.T) {
 	}
 }
 
-func TestBuildTableRow(t *testing.T) {
-	cells := []string{"A", "B", "C"}
-	row := buildTableRow(cells, "grey")
-
-	if row["tag"] != "column_set" {
-		t.Errorf("tag = %v, want column_set", row["tag"])
-	}
-	if row["background_style"] != "grey" {
-		t.Errorf("background_style = %v, want grey", row["background_style"])
-	}
-
-	cols, ok := row["columns"].([]map[string]interface{})
-	if !ok || len(cols) != 3 {
-		t.Fatalf("columns = %v, want 3 columns", row["columns"])
-	}
-	for i, c := range cols {
-		if c["tag"] != "column" {
-			t.Errorf("column[%d].tag = %v, want column", i, c["tag"])
-		}
-		if c["weight"] != 1 {
-			t.Errorf("column[%d].weight = %v, want 1", i, c["weight"])
-		}
-	}
-}
-
 func TestBuildTableCard(t *testing.T) {
 	tests := []struct {
-		name    string
-		input   string
-		wantErr bool
-		wantLen int // expected elements length
+		name     string
+		input    string
+		wantErr  bool
+		wantRows int
 	}{
 		{
-			name:    "normal table",
-			input:   "| A | B |\n| --- | --- |\n| 1 | 2 |",
-			wantErr: false,
-			wantLen: 2,
+			name:     "normal table",
+			input:    "| A | B |\n| --- | --- |\n| 1 | 2 |",
+			wantErr:  false,
+			wantRows: 1,
 		},
 		{
 			name:    "too short",
@@ -96,22 +72,22 @@ func TestBuildTableCard(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "empty header",
-			input:   "| | |\n| --- | --- |",
-			wantErr: false,
-			wantLen: 1,
+			name:     "empty header",
+			input:    "| | |\n| --- | --- |",
+			wantErr:  false,
+			wantRows: 0,
 		},
 		{
-			name:    "column padding",
-			input:   "| A | B |\n| --- | --- |\n| 1 |",
-			wantErr: false,
-			wantLen: 2,
+			name:     "column padding",
+			input:    "| A | B |\n| --- | --- |\n| 1 |",
+			wantErr:  false,
+			wantRows: 1,
 		},
 		{
-			name:    "column truncation",
-			input:   "| A | B |\n| --- | --- |\n| 1 | 2 | 3 |",
-			wantErr: false,
-			wantLen: 2,
+			name:     "column truncation",
+			input:    "| A | B |\n| --- | --- |\n| 1 | 2 | 3 |",
+			wantErr:  false,
+			wantRows: 1,
 		},
 	}
 	for _, tt := range tests {
@@ -127,8 +103,20 @@ func TestBuildTableCard(t *testing.T) {
 			if !ok {
 				t.Fatal("elements not found or wrong type")
 			}
-			if len(elements) != tt.wantLen {
-				t.Errorf("len(elements) = %d, want %d", len(elements), tt.wantLen)
+			if len(elements) != 1 {
+				t.Fatalf("len(elements) = %d, want 1 table element", len(elements))
+			}
+			table := elements[0]
+			if table["tag"] != "table" {
+				t.Fatalf("table tag = %v, want table", table["tag"])
+			}
+			columns, ok := table["columns"].([]map[string]interface{})
+			if !ok || len(columns) != len(parseMarkdownTableCells(strings.Split(tt.input, "\n")[0])) {
+				t.Fatalf("columns = %v", table["columns"])
+			}
+			rows, ok := table["rows"].([]map[string]interface{})
+			if !ok || len(rows) != tt.wantRows {
+				t.Errorf("rows = %v, want %d rows", table["rows"], tt.wantRows)
 			}
 		})
 	}
