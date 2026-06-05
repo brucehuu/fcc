@@ -203,6 +203,10 @@ func updateEnvVars(path string, updates map[string]string) error {
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		// 跳过注释行，避免误改
+		if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
 		for key, value := range remaining {
 			prefix := key + "="
 			if strings.HasPrefix(trimmed, prefix) {

@@ -242,6 +242,8 @@ func ReplaceBinary(newPath string) error {
 		return fmt.Errorf("chmod new binary: %w", err)
 	}
 
+	// 替换成功，清理旧版本文件
+	_ = os.Remove(oldPath)
 	return nil
 }
 

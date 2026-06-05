@@ -283,9 +283,11 @@ func (b *Bridge) Start(ctx context.Context) error {
 		case <-time.After(3 * time.Second):
 		}
 		if b.targetName != "" {
-			if err := b.messenger.SendWelcome(ctx, b.targetName, "FCC is coming..."); err != nil {
+			welcomeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			if err := b.messenger.SendWelcome(welcomeCtx, b.targetName, "FCC is coming..."); err != nil {
 				log.Warnf("[bridge] send welcome: %v", err)
 			}
+			cancel()
 		}
 	}()
 

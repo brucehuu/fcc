@@ -12,11 +12,14 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"feishu-connect/internal/config"
 	"feishu-connect/internal/updater"
 	webview "github.com/webview/webview_go"
 )
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 var (
 	configMu      sync.Mutex
@@ -781,7 +784,7 @@ func getTenantAccessToken(appID, appSecret string) (string, error) {
 		"app_id":     appID,
 		"app_secret": appSecret,
 	})
-	resp, err := http.Post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", "application/json", bytes.NewReader(body))
+	resp, err := httpClient.Post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -817,7 +820,7 @@ func getAllChats(token string) ([]string, error) {
 		}
 		req, _ := http.NewRequest("GET", url, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			return nil, err
 		}
@@ -862,7 +865,7 @@ func getChatMembers(token, chatID string) ([]memberInfo, error) {
 		}
 		req, _ := http.NewRequest("GET", url, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := httpClient.Do(req)
 		if err != nil {
 			return nil, err
 		}

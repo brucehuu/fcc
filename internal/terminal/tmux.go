@@ -167,14 +167,10 @@ func SplitCommand(command string) []string {
 		case !inQuote && (r == '"' || r == '\''):
 			inQuote = true
 			quoteChar = r
-			if current.Len() > 0 {
-				args = append(args, current.String())
-				current.Reset()
-			}
+			// 不 flush current，让引号内外内容拼接（如 foo"bar" -> foobar）
 		case inQuote && r == quoteChar:
 			inQuote = false
-			args = append(args, current.String())
-			current.Reset()
+			// 不 flush，让引号内外内容保持连续（如 foo'bar'baz -> foobarbaz）
 		case !inQuote && (r == ' ' || r == '\t'):
 			if current.Len() > 0 {
 				args = append(args, current.String())
