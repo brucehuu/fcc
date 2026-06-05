@@ -69,11 +69,22 @@ func Run() error {
 	defer ticker.Stop()
 
 	for range ticker.C {
-		if !isFCCRunning() {
+		fccRunning := isFCCRunning()
+		tmuxRunning := isTmuxSessionRunning()
+
+		if !fccRunning {
 			log.Warn("[watchdog] fcc not running, restarting...")
 			if err := startFCC(); err != nil {
 				log.Errorf("[watchdog] restart failed: %v", err)
 			}
+			continue
+		}
+
+		if !tmuxRunning {
+			log.Warn("[watchdog] tmux session gone but fcc still alive, killing fcc to restart...")
+			killFromPIDFile(fccPidFile)
+			_ = os.Remove(fccPidFile)
+			// 下一轮循环会检测到 fcc 不在并重新启动
 		}
 	}
 
@@ -146,6 +157,15 @@ func isFCCRunning() bool {
 	}
 
 	return processExists(pid)
+}
+
+func isTmuxSessionRunning() bool {
+	out, err := exec.Command("tmux", "has-session", "-t", "fcc").CombinedOutput()
+	if err != nil {
+		log.Debugf("[watchdog] tmux session check failed: %v, output: %s", err, string(out))
+		return false
+	}
+	return true
 }
 
 // IsFCCRunning returns true if the fcc main process is currently running.
