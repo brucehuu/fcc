@@ -1,4 +1,6 @@
 fcc
+fcc-darwin-arm64
+fcc-darwin-arm64.sha256
 fcc.log
 .env
 *.log
