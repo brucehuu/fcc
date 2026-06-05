@@ -369,6 +369,7 @@ func (m *mockMessenger) SendInteractiveTable(ctx context.Context, _, _, table st
 	m.tables = append(m.tables, table)
 	return nil
 }
+func (m *mockMessenger) SendWelcome(ctx context.Context, targetName, text string) error { return nil }
 func (m *mockMessenger) CleanupOldImages(maxAge time.Duration) error { return nil }
 func (m *mockMessenger) Close() {}
 

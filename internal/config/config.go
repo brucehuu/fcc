@@ -224,7 +224,7 @@ func updateEnvVars(path string, updates map[string]string) error {
 	}
 
 	out := strings.Join(lines, "\n")
-	if err := writeFileAtomic(path, []byte(out), 0644); err != nil {
+	if err := writeFileAtomic(path, []byte(out), 0600); err != nil {
 		return fmt.Errorf("write env file failed: %w", err)
 	}
 	return nil
