@@ -30,9 +30,9 @@ const (
 	firstRunFlag     = "--first-run"
 )
 
-func processIcon(src []byte) []byte {
+func processIcon(src []byte, padding int) []byte {
 	icon := src
-	if padded, ok := tray.AddIconPadding(icon, 18); ok {
+	if padded, ok := tray.AddIconPadding(icon, padding); ok {
 		icon = padded
 	}
 	if rounded, ok := tray.ApplyRoundedCorners(icon); ok {
@@ -57,12 +57,12 @@ func main() {
 	// --config-window / --first-run 模式：helper 子进程跑 webview 配置窗口。
 	// 需要在 Dock 显示 fcc 图标，所以提前处理图标并传给 RunConfigWindow。
 	if len(os.Args) > 1 && os.Args[1] == configWindowFlag {
-		iconPNG := processIcon(appIconPNG)
+		iconPNG := processIcon(appIconPNG, 15)
 		tray.RunConfigWindow(iconPNG, false, version)
 		return
 	}
 	if len(os.Args) > 1 && os.Args[1] == firstRunFlag {
-		iconPNG := processIcon(appIconPNG)
+		iconPNG := processIcon(appIconPNG, 15)
 		tray.RunConfigWindow(iconPNG, true, version)
 		return
 	}
@@ -87,7 +87,7 @@ func main() {
 
 	// 给 fcc 可执行文件自身设置 Finder 图标（幂等，失败不阻塞启动）。
 	if exe, err := os.Executable(); err == nil {
-		_ = tray.SetFinderIcon(exe, processIcon(appIconPNG))
+		_ = tray.SetFinderIcon(exe, processIcon(appIconPNG, 15))
 	}
 
 	flag.Usage = func() {
@@ -226,7 +226,7 @@ func main() {
 	// 阻塞主线程：跑 NSApp loop 直到用户 Quit。
 	// cfg.OnExit：通用清理（杀 tmux + cancel），Ctrl+C 和菜单 Quit 都会走这里。
 	// cfg.OnMenuQuit：只在用户点菜单 Quit 时跑，**杀 watchdog**（彻底退出）。
-	iconPNG := processIcon(appIconPNG)
+	iconPNG := processIcon(appIconPNG, 0)
 	tray.Run(tray.Config{
 		Version:      version,
 		Icon:         iconPNG,
