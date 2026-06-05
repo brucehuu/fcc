@@ -78,18 +78,11 @@ func (t *TmuxSession) HasSession() bool {
 
 func (t *TmuxSession) SendKeys(text string) error {
 	// 统一换行符：Windows 粘贴的 \r\n 先转成 \n
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	lines := strings.Split(text, "\n")
-
-	// 跳过开头的空行
-	start := 0
-	for start < len(lines) && lines[start] == "" {
-		start++
-	}
-	if start == len(lines) {
+	text = trimLeadingBlankLines(text)
+	if text == "" {
 		return nil
 	}
-	lines = lines[start:]
+	lines := strings.Split(text, "\n")
 
 	// 把多行文本用 \r\n 连接，一次 send-keys -l 发送
 	// \r\n 在终端中等价于逐行按 Enter
@@ -112,6 +105,19 @@ func (t *TmuxSession) SendKeys(text string) error {
 	return nil
 }
 
+// SendLiteral 只发送文本本身，不追加回车。需要提交时调用方再发送 Enter 特殊键。
+func (t *TmuxSession) SendLiteral(text string) error {
+	text = trimLeadingBlankLines(text)
+	if text == "" {
+		return nil
+	}
+	cmd := exec.Command("tmux", "send-keys", "-t", t.session, "-l", text)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("send-keys literal failed: %w, output: %s", err, string(out))
+	}
+	return nil
+}
+
 // SendSpecialKey 发送 tmux 特殊按键（不加 -l，解析键名）
 // 支持: Escape, C-c, C-d, Enter, Space, Tab, BSpace 等
 func (t *TmuxSession) SendSpecialKey(key string) error {
@@ -120,6 +126,19 @@ func (t *TmuxSession) SendSpecialKey(key string) error {
 		return fmt.Errorf("send-keys %s failed: %w", key, err)
 	}
 	return nil
+}
+
+func trimLeadingBlankLines(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	start := 0
+	for start < len(lines) && lines[start] == "" {
+		start++
+	}
+	if start == len(lines) {
+		return ""
+	}
+	return strings.Join(lines[start:], "\n")
 }
 
 // CaptureVisible 捕获 pane 内容，包含最近 historyLines 行历史

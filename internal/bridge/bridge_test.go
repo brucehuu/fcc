@@ -212,6 +212,97 @@ func TestFilterPaneClaudeUserEcho(t *testing.T) {
 	}
 }
 
+func TestFilterPaneCodexNoiseAndToolActivity(t *testing.T) {
+	b := &Bridge{
+		isCodex:         true,
+		noisePatterns:   []string{"fluttering", "nesting", "thinking"},
+		lastUserMessage: "先不动手，我们先分析项目情况吧",
+	}
+	input := strings.Join([]string{
+		"› 先不动手，我们先分析项目情况吧",
+		"tab to queue message                 96% context left",
+		"Tip: Try the Codex App. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-",
+		"page=true",
+		"• 我先只做只读梳理，不改文件、不启动服务。",
+		"• Ran pwd && ls",
+		"└ /Users/huguobiao/code/fcc",
+		"README.md",
+		"... +6 lines (ctrl + t to view transcript)",
+		"log",
+		"main.go",
+		"• Explored",
+		"└ List rg --files -g 'README' -g AGENTS.md",
+		"-g package.json",
+		"• 初步看是一个 Go 项目，分层不大。",
+		"─ Worked for 2m 15s ─────────────────────",
+		"›",
+		"gpt-5.5 high · ~/code/fcc",
+	}, "\n")
+	want := "• 我先只做只读梳理，不改文件、不启动服务。\n• 初步看是一个 Go 项目，分层不大。"
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexRulesAreOptIn(t *testing.T) {
+	b := &Bridge{noisePatterns: []string{"fluttering", "nesting", "thinking"}}
+	input := strings.Join([]string{
+		"tab to queue message                 96% context left",
+		"• Ran pwd && ls",
+		"└ /Users/huguobiao/code/fcc",
+		"• 我先只做只读梳理。",
+	}, "\n")
+	if got := b.filterPane(input); got != input {
+		t.Errorf("filterPane() =\n%q\nwant unchanged:\n%q", got, input)
+	}
+}
+
+func TestFilterPaneCodexPlainAlignedTable(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"• 在。给你一个简单表格看效果：",
+		"•   项目      数量      状态",
+		"───────   ──────   ───────",
+		"苹果        3       已购买",
+		"───────   ──────   ───────",
+		"香蕉        5       待购买",
+		"───────   ──────   ───────",
+		"橙子        2       已购买",
+		"你显示表格是这么",
+	}, "\n")
+	want := strings.Join([]string{
+		"• 在。给你一个简单表格看效果：",
+		"| 项目 | 数量 | 状态 |",
+		"| --- | --- | --- |",
+		"| 苹果 | 3 | 已购买 |",
+		"| 香蕉 | 5 | 待购买 |",
+		"| 橙子 | 2 | 已购买 |",
+		"你显示表格是这么",
+	}, "\n")
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexFiltersAnyPromptEcho(t *testing.T) {
+	b := &Bridge{
+		isCodex:         true,
+		noisePatterns:   []string{"fluttering", "nesting", "thinking"},
+		lastUserMessage: "帮我简单分析下这个项目呢，只看不做任何动作。",
+	}
+	input := strings.Join([]string{
+		"› 来段Json看看呢",
+		"• 我只做只读分析。",
+	}, "\n")
+	want := "• 我只做只读分析。"
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
 func TestClaudeUserEchoLineVariants(t *testing.T) {
 	userMsg := "你帮我返回一个表格看一下，我看能不能够正常的展示"
 	tests := []string{
@@ -387,6 +478,41 @@ func TestMatchCommandDebounceLogic(t *testing.T) {
 	}
 }
 
+func TestSendUserInputToTerminalCodexUsesRealEnter(t *testing.T) {
+	tm := &mockTerminal{}
+	b := &Bridge{isCodex: true}
+
+	if err := b.sendUserInputToTerminal(tm, "给我一个表格"); err != nil {
+		t.Fatalf("sendUserInputToTerminal() error = %v", err)
+	}
+
+	if len(tm.sentKeys) != 0 {
+		t.Fatalf("Codex should not use SendKeys, got %v", tm.sentKeys)
+	}
+	if len(tm.sentLiteral) != 1 || tm.sentLiteral[0] != "给我一个表格" {
+		t.Fatalf("sentLiteral = %v, want [给我一个表格]", tm.sentLiteral)
+	}
+	if len(tm.sentSpecial) != 1 || tm.sentSpecial[0] != "Enter" {
+		t.Fatalf("sentSpecial = %v, want [Enter]", tm.sentSpecial)
+	}
+}
+
+func TestSendUserInputToTerminalNonCodexKeepsLegacySendKeys(t *testing.T) {
+	tm := &mockTerminal{}
+	b := &Bridge{}
+
+	if err := b.sendUserInputToTerminal(tm, "hello"); err != nil {
+		t.Fatalf("sendUserInputToTerminal() error = %v", err)
+	}
+
+	if len(tm.sentKeys) != 1 || tm.sentKeys[0] != "hello" {
+		t.Fatalf("sentKeys = %v, want [hello]", tm.sentKeys)
+	}
+	if len(tm.sentLiteral) != 0 || len(tm.sentSpecial) != 0 {
+		t.Fatalf("non-Codex should not use literal/special, got literal=%v special=%v", tm.sentLiteral, tm.sentSpecial)
+	}
+}
+
 func TestSplitDiffIntoBlocksEdgeCases(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -503,6 +629,50 @@ func TestFormatBlockToMarkdownKeepsExistingFence(t *testing.T) {
 	input := "```json\n{}\n```"
 	if got := formatBlockToMarkdown(input); got != input {
 		t.Fatalf("formatBlockToMarkdown() = %q, want %q", got, input)
+	}
+}
+
+func TestFilterPanePreservesCodeIndentation(t *testing.T) {
+	b := &Bridge{isCodex: true}
+	input := strings.Join([]string{
+		"• JSON 示例：",
+		"{",
+		`  "project": "fcc",`,
+		`  "tasks": [`,
+		"    {",
+		`      "id": 1`,
+		"    }",
+		"  ]",
+		"}",
+	}, "\n")
+	want := input
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFormatBlockToMarkdownFencesJavaScriptCodeBlock(t *testing.T) {
+	input := strings.Join([]string{
+		"• function formatStatus(task) {",
+		"  const statusMap = {",
+		`    pending: "未开始",`,
+		`    active: "进行中",`,
+		`    done: "已完成",`,
+		"  };",
+		"  return `${task.name}: ${statusMap[task.status] ?? \"未知状态\"}`;",
+		"}",
+		`console.log(formatStatus({ name: "代码检查", status: "active" }));`,
+	}, "\n")
+
+	got := formatBlockToMarkdown(input)
+	if !strings.Contains(got, "```javascript\nfunction formatStatus(task) {") {
+		t.Fatalf("expected fenced javascript block, got:\n%s", got)
+	}
+	if !strings.Contains(got, "  const statusMap = {") || !strings.Contains(got, `    pending: "未开始",`) {
+		t.Fatalf("expected indentation to be preserved, got:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "\n```") {
+		t.Fatalf("expected closing code fence, got:\n%s", got)
 	}
 }
 
@@ -630,6 +800,65 @@ func TestSendMarkdownBlocksBuffersStreamingGoUntilFunctionCloses(t *testing.T) {
 	}
 	if !strings.Contains(got, "\n```\n后续说明文字") {
 		t.Fatalf("expected suffix outside go fence, got:\n%s", got)
+	}
+}
+
+func TestSendMarkdownBlocksBuffersStreamingJavaScriptUntilClosed(t *testing.T) {
+	ms := &mockMessenger{}
+	b := &Bridge{
+		messenger:   ms,
+		sendTimeout: 10 * time.Second,
+	}
+	key := receiverKey{id: "user1", kind: "open_id"}
+	state := &receiverState{}
+	b.receivers.Store(key, state)
+
+	ctx := context.Background()
+	b.sendMarkdownBlocks(ctx, key, state, []string{strings.Join([]string{
+		"• 可以，随便来一段实用点的：",
+		"• function debounce(fn, delay = 300) {",
+		"  let timer = null;",
+		"  return function (...args) {",
+		"    clearTimeout(timer);",
+		"    timer = setTimeout(() => {",
+		"      fn.apply(this, args);",
+		"    }, delay);",
+		"  };",
+		"}",
+		"// 示例",
+		"const onSearch = debounce((keyword) => {",
+	}, "\n")})
+	if state.pendingCodeLang != "javascript" {
+		t.Fatalf("expected pending javascript, got lang=%q", state.pendingCodeLang)
+	}
+	texts := ms.Texts()
+	if len(texts) == 0 || strings.Contains(texts[len(texts)-1], "```javascript") {
+		t.Fatalf("first chunk should not send incomplete javascript fence, texts=%v", texts)
+	}
+
+	b.sendMarkdownBlocks(ctx, key, state, []string{strings.Join([]string{
+		`  console.log("search:", keyword);`,
+		"}, 500);",
+		`onSearch("a");`,
+		`onSearch("ab");`,
+		`onSearch("abc"); // 只有最后一次会在 500ms 后执行`,
+		"这个小片段挺常见。",
+	}, "\n")})
+
+	texts = ms.Texts()
+	if len(texts) == 0 {
+		t.Fatal("expected markdown text after javascript closes")
+	}
+	got := texts[len(texts)-1]
+	if strings.Count(got, "```javascript") != 1 {
+		t.Fatalf("expected one javascript fence, got:\n%s", got)
+	}
+	if !strings.Contains(got, `console.log("search:", keyword);`) ||
+		!strings.Contains(got, `onSearch("abc"); // 只有最后一次会在 500ms 后执行`) {
+		t.Fatalf("expected full javascript code inside fence, got:\n%s", got)
+	}
+	if !strings.Contains(got, "\n```\n这个小片段挺常见。") {
+		t.Fatalf("expected prose suffix outside fence, got:\n%s", got)
 	}
 }
 
@@ -785,14 +1014,33 @@ func (m *mockMessenger) Tables() []string {
 
 // mockTerminal 用于测试
 type mockTerminal struct {
-	captures []string
-	index    int
-	mu       sync.Mutex
+	captures    []string
+	index       int
+	sentKeys    []string
+	sentLiteral []string
+	sentSpecial []string
+	mu          sync.Mutex
 }
 
 func (t *mockTerminal) Start(command, workDir string) error { return nil }
-func (t *mockTerminal) SendKeys(text string) error          { return nil }
-func (t *mockTerminal) SendSpecialKey(key string) error     { return nil }
+func (t *mockTerminal) SendKeys(text string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sentKeys = append(t.sentKeys, text)
+	return nil
+}
+func (t *mockTerminal) SendLiteral(text string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sentLiteral = append(t.sentLiteral, text)
+	return nil
+}
+func (t *mockTerminal) SendSpecialKey(key string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.sentSpecial = append(t.sentSpecial, key)
+	return nil
+}
 func (t *mockTerminal) CaptureVisible(historyLines int) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

@@ -23,6 +23,7 @@ type Messenger interface {
 type Terminal interface {
 	Start(command, workDir string) error
 	SendKeys(text string) error
+	SendLiteral(text string) error
 	SendSpecialKey(key string) error
 	CaptureVisible(historyLines int) (string, error)
 	WaitReady() error

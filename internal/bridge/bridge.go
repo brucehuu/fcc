@@ -73,6 +73,7 @@ type Bridge struct {
 	noisePatterns     []string
 	metrics           bridgeMetrics
 	isClaude          bool   // 仅 Claude 命令启用装饰性状态行过滤
+	isCodex           bool   // 仅 Codex 命令启用 Codex TUI 工具日志过滤
 	targetName        string // 首次启动欢迎消息的目标用户
 
 	lastUserMessage string     // 最近从飞书收到的用户消息，用于过滤 tmux 回显
@@ -135,6 +136,7 @@ func New(cfg *BridgeConfig) (*Bridge, error) {
 		interruptDebounce: 500 * time.Millisecond,
 		noisePatterns:     cfg.NoisePatterns,
 		isClaude:          isClaudeCommand(command),
+		isCodex:           isCodexCommand(command),
 		targetName:        cfg.TargetName,
 	}
 	b.messenger = bot.New(cfg.AppID, cfg.AppSecret, b.handleMessage, cfg.SendRetries)
@@ -278,9 +280,19 @@ func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 	b.termMu.RLock()
 	term := b.term
 	b.termMu.RUnlock()
-	if err := term.SendKeys(text); err != nil {
+	if err := b.sendUserInputToTerminal(term, text); err != nil {
 		log.Warnf("[bridge] failed to send keys: %v", err)
 	}
+}
+
+func (b *Bridge) sendUserInputToTerminal(term Terminal, text string) error {
+	if !b.isCodex {
+		return term.SendKeys(text)
+	}
+	if err := term.SendLiteral(text); err != nil {
+		return err
+	}
+	return term.SendSpecialKey("Enter")
 }
 
 // Start 启动后台 goroutine（飞书连接 + output capture），不 attach tmux
@@ -682,6 +694,15 @@ func (b *Bridge) appendMarkdownBlock(ctx context.Context, key receiverKey, state
 			return
 		}
 
+		prefix, codeLines, ok = splitStreamingJavaScriptStart(block)
+		if ok && !isJavaScriptCodeComplete(codeLines) {
+			appendMarkdown(formatBlockToMarkdown(prefix))
+			state.pendingCodeLang = "javascript"
+			state.pendingCode = append([]string(nil), codeLines...)
+			state.pendingCodeSince = time.Now()
+			return
+		}
+
 		appendMarkdown(formatBlockToMarkdown(block))
 		return
 	}
@@ -883,7 +904,16 @@ func (b *Bridge) filterPane(pane string) string {
 	lines := strings.Split(pane, "\n")
 	var result []string
 	var tableBuf []string
+	var codexPlainTableBuf []string
 	inTable := false
+
+	flushCodexPlainTable := func() {
+		if len(codexPlainTableBuf) == 0 {
+			return
+		}
+		result = append(result, flushCodexPlainTable(codexPlainTableBuf)...)
+		codexPlainTableBuf = nil
+	}
 
 	b.lastUserMsgMu.Lock()
 	userMsg := b.lastUserMessage
@@ -891,10 +921,39 @@ func (b *Bridge) filterPane(pane string) string {
 
 	skipClaudeProgressContinuation := false
 	skipClaudeToolOutput := false
+	skipCodexToolOutput := false
 	for i := 0; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
+		rawLine := strings.TrimRight(lines[i], " \t\r")
+		line := strings.TrimSpace(rawLine)
 		if line == "" {
 			skipClaudeToolOutput = false
+			continue
+		}
+
+		if b.isCodex && skipCodexToolOutput {
+			if isCodexAssistantTextLine(line) {
+				skipCodexToolOutput = false
+			} else {
+				continue
+			}
+		}
+
+		if b.isCodex && isCodexNoiseLine(line, userMsg) {
+			continue
+		}
+
+		if b.isCodex && isCodexToolActivityLine(line) {
+			skipCodexToolOutput = true
+			continue
+		}
+
+		if b.isCodex && isCodexPlainTableLine(line) {
+			if inTable {
+				result = append(result, flushTable(tableBuf)...)
+				tableBuf = nil
+				inTable = false
+			}
+			codexPlainTableBuf = append(codexPlainTableBuf, line)
 			continue
 		}
 
@@ -936,6 +995,8 @@ func (b *Bridge) filterPane(pane string) string {
 			continue
 		}
 
+		flushCodexPlainTable()
+
 		// 过滤"用户消息 + Tip"模式：当前行是用户消息，下一行是 Tip
 		if line == userMsg && i+1 < len(lines) {
 			nextLine := strings.TrimSpace(lines[i+1])
@@ -962,9 +1023,10 @@ func (b *Bridge) filterPane(pane string) string {
 			tableBuf = nil
 			inTable = false
 		}
-		result = append(result, line)
+		result = append(result, rawLine)
 	}
 
+	flushCodexPlainTable()
 	if inTable && len(tableBuf) > 0 {
 		result = append(result, flushTable(tableBuf)...)
 	}
@@ -1111,7 +1173,10 @@ func formatBlockToMarkdown(block string) string {
 	if fenced := fenceJSONLikeBlock(block); fenced != block {
 		return fenced
 	}
-	return fenceGoLikeBlock(block)
+	if fenced := fenceGoLikeBlock(block); fenced != block {
+		return fenced
+	}
+	return fenceJavaScriptLikeBlock(block)
 }
 
 func fenceJSONLikeBlock(block string) string {
@@ -1166,8 +1231,22 @@ func splitStreamingJSONStart(block string) (string, []string, bool) {
 
 func appendPendingCodeLines(state *receiverState, lines []string) (string, string) {
 	for i, line := range lines {
+		if state.pendingCodeLang == "javascript" &&
+			isJavaScriptCodeComplete(state.pendingCode) &&
+			!isJavaScriptCodeLine(line) &&
+			isLikelyProseLine(line) {
+			done := fencedCodeBlock(state.pendingCodeLang, state.pendingCode)
+			state.pendingCode = nil
+			state.pendingCodeLang = ""
+			state.pendingCodeSince = time.Time{}
+			return done, strings.TrimSpace(strings.Join(lines[i:], "\n"))
+		}
+
 		state.pendingCode = append(state.pendingCode, line)
 		if isPendingCodeComplete(state.pendingCodeLang, state.pendingCode) {
+			if state.pendingCodeLang == "javascript" && nextJavaScriptLineContinues(lines[i+1:]) {
+				continue
+			}
 			done := fencedCodeBlock(state.pendingCodeLang, state.pendingCode)
 			state.pendingCode = nil
 			state.pendingCodeLang = ""
@@ -1179,12 +1258,24 @@ func appendPendingCodeLines(state *receiverState, lines []string) (string, strin
 	return "", ""
 }
 
+func nextJavaScriptLineContinues(lines []string) bool {
+	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		return isJavaScriptCodeLine(line)
+	}
+	return false
+}
+
 func isPendingCodeComplete(lang string, lines []string) bool {
 	switch lang {
 	case "json":
 		return isJSONCodeComplete(lines)
 	case "go":
 		return isGoCodeComplete(lines)
+	case "javascript":
+		return isJavaScriptCodeComplete(lines)
 	default:
 		return len(lines) > 0
 	}
@@ -1375,6 +1466,72 @@ func fenceGoLikeBlock(block string) string {
 	return fenced
 }
 
+func fenceJavaScriptLikeBlock(block string) string {
+	lines := strings.Split(block, "\n")
+	start := -1
+	for i, line := range lines {
+		if isJavaScriptCodeStartLine(line) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return block
+	}
+
+	end := start
+	codeLike := 0
+	braceBalance := 0
+	for i := start; i < len(lines); i++ {
+		line := lines[i]
+		trimmed := strings.TrimSpace(line)
+		if i > start && codeLike >= 4 && braceBalance <= 0 && isLikelyProseLine(trimmed) {
+			break
+		}
+		if isJavaScriptCodeLine(line) {
+			codeLike++
+		}
+		braceBalance += codeBraceDelta(line)
+		end = i + 1
+	}
+	if end-start < 3 || codeLike < 3 {
+		return block
+	}
+
+	codeLines := append([]string(nil), lines[start:end]...)
+	codeLines[0] = normalizeCodeStartLine(codeLines[0])
+	if !isJavaScriptCodeComplete(codeLines) {
+		return block
+	}
+	code := strings.TrimSpace(strings.Join(codeLines, "\n"))
+	if code == "" {
+		return block
+	}
+	fenced := "```javascript\n" + code + "\n```"
+	prefix := strings.TrimSpace(strings.Join(lines[:start], "\n"))
+	suffix := strings.TrimSpace(strings.Join(lines[end:], "\n"))
+	if prefix != "" {
+		fenced = prefix + "\n\n" + fenced
+	}
+	if suffix != "" {
+		fenced += "\n\n" + suffix
+	}
+	return fenced
+}
+
+func splitStreamingJavaScriptStart(block string) (string, []string, bool) {
+	lines := strings.Split(strings.TrimSpace(block), "\n")
+	for i, line := range lines {
+		if !isJavaScriptCodeStartLine(line) {
+			continue
+		}
+		codeLines := append([]string(nil), lines[i:]...)
+		codeLines[0] = normalizeCodeStartLine(codeLines[0])
+		return strings.TrimSpace(strings.Join(lines[:i], "\n")), codeLines, true
+	}
+	return "", nil, false
+}
+
 func splitStreamingGoStart(block string) (string, []string, bool) {
 	lines := strings.Split(strings.TrimSpace(block), "\n")
 	for i, line := range lines {
@@ -1414,6 +1571,104 @@ func isGoCodeLine(line string) bool {
 		return true
 	}
 	return false
+}
+
+func isJavaScriptCodeComplete(lines []string) bool {
+	if len(lines) < 3 {
+		return false
+	}
+	codeLike := 0
+	balance := 0
+	for _, line := range lines {
+		if isJavaScriptCodeLine(line) {
+			codeLike++
+		}
+		balance += codeBraceDelta(line)
+	}
+	return codeLike >= 3 && balance <= 0
+}
+
+func isJavaScriptCodeStartLine(line string) bool {
+	trimmed := normalizeCodeStartLine(line)
+	return strings.HasPrefix(trimmed, "function ") ||
+		strings.HasPrefix(trimmed, "async function ") ||
+		strings.HasPrefix(trimmed, "const ") ||
+		strings.HasPrefix(trimmed, "let ") ||
+		strings.HasPrefix(trimmed, "var ") ||
+		strings.HasPrefix(trimmed, "class ") ||
+		strings.HasPrefix(trimmed, "export ") ||
+		strings.HasPrefix(trimmed, "import ")
+}
+
+func isJavaScriptCodeLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return true
+	}
+	trimmed = normalizeCodeStartLine(trimmed)
+	if isJavaScriptCodeStartLine(trimmed) {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") || strings.HasPrefix(trimmed, "*") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "}") || strings.HasPrefix(trimmed, "{") ||
+		strings.HasPrefix(trimmed, ");") || strings.HasPrefix(trimmed, "];") || strings.HasPrefix(trimmed, "};") {
+		return true
+	}
+	if strings.Contains(trimmed, "=>") ||
+		strings.Contains(trimmed, " = ") ||
+		strings.Contains(trimmed, ": ") ||
+		strings.Contains(trimmed, ".") ||
+		strings.Contains(trimmed, "(") ||
+		strings.Contains(trimmed, ")") ||
+		strings.Contains(trimmed, "`") ||
+		strings.HasSuffix(trimmed, ",") ||
+		strings.HasSuffix(trimmed, ";") {
+		return true
+	}
+	return false
+}
+
+func codeBraceDelta(line string) int {
+	balance := 0
+	inSingle := false
+	inDouble := false
+	inBacktick := false
+	escaped := false
+	for _, r := range line {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if r == '\\' && (inSingle || inDouble || inBacktick) {
+			escaped = true
+			continue
+		}
+		switch r {
+		case '\'':
+			if !inDouble && !inBacktick {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle && !inBacktick {
+				inDouble = !inDouble
+			}
+		case '`':
+			if !inSingle && !inDouble {
+				inBacktick = !inBacktick
+			}
+		case '{':
+			if !inSingle && !inDouble && !inBacktick {
+				balance++
+			}
+		case '}':
+			if !inSingle && !inDouble && !inBacktick {
+				balance--
+			}
+		}
+	}
+	return balance
 }
 
 func isLikelyProseLine(line string) bool {
@@ -1626,6 +1881,7 @@ func (b *Bridge) RestartTmux(workDir string) error {
 	b.termMu.Lock()
 	b.term = tm
 	b.isClaude = isClaudeCommand(command)
+	b.isCodex = isCodexCommand(command)
 	b.termMu.Unlock()
 
 	if err := tm.WaitReady(); err != nil {
