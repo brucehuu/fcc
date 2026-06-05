@@ -693,6 +693,10 @@ func (b *Bridge) isNoiseLine(line string) bool {
 	if isTUIPrompt(line) {
 		return true
 	}
+	// 无条件过滤 Claude Tip 行（⎿  Tip: ...）
+	if IsTipLine(line) {
+		return true
+	}
 	// 仅 Claude 命令：过滤 TUI 装饰性状态行（spinner、Thinking... 等）
 	if b.isClaude && isClaudeDecorativeLine(line) {
 		return true
