@@ -67,6 +67,9 @@ type Bridge struct {
 	metrics           bridgeMetrics
 	isClaude          bool   // 仅 Claude 命令启用装饰性状态行过滤
 	targetName        string // 首次启动欢迎消息的目标用户
+
+	lastUserMessage   string      // 最近从飞书收到的用户消息，用于过滤 tmux 回显
+	lastUserMsgMu     sync.Mutex  // 保护 lastUserMessage
 }
 
 // bridgeMetrics 轻量级运行时指标
@@ -257,6 +260,11 @@ func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 	s.messageID = ""
 	s.contentBuf.Reset()
 	s.sendMu.Unlock()
+
+	// 记录用户消息（trim 后），用于后续过滤 tmux 中的回显 + Tip 组合
+	b.lastUserMsgMu.Lock()
+	b.lastUserMessage = strings.TrimSpace(text)
+	b.lastUserMsgMu.Unlock()
 
 	b.metrics.messagesReceived.Add(1)
 	log.Debugf("[bridge] sending to tmux: %q", log.Truncate(text, 80))
@@ -615,14 +623,27 @@ func (b *Bridge) filterPane(pane string) string {
 	var tableBuf []string
 	inTable := false
 
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
+	b.lastUserMsgMu.Lock()
+	userMsg := b.lastUserMessage
+	b.lastUserMsgMu.Unlock()
+
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
 		if line == "" {
 			continue
 		}
 
 		if b.isNoiseLine(line) {
 			continue
+		}
+
+		// 过滤"用户消息 + Tip"模式：当前行是用户消息，下一行是 Tip
+		if line == userMsg && i+1 < len(lines) {
+			nextLine := strings.TrimSpace(lines[i+1])
+			if IsTipLine(nextLine) {
+				i++ // 跳过下一行（Tip）
+				continue
+			}
 		}
 
 		// 表格内容行：包含 │ 但不是树形连接符

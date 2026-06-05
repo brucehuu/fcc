@@ -70,6 +70,11 @@ func isClaudeDecorativeLine(line string) bool {
 	return false
 }
 
+// IsTipLine 判断一行是否是 Claude TUI 的 Tip 提示行。
+func IsTipLine(line string) bool {
+	return tipLineRe.MatchString(line)
+}
+
 func containsSpinnerRune(s string) bool {
 	for _, r := range s {
 		if strings.ContainsRune(spinnerRunes, r) {
