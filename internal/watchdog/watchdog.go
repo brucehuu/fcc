@@ -14,7 +14,7 @@ import (
 const (
 	watchdogPidFile = "/tmp/fcc-watchdog.pid"
 	fccPidFile      = "/tmp/fcc.pid"
-	checkInterval   = 1 * time.Minute
+	checkInterval   = 6 * time.Second
 )
 
 // ForkIfNeeded 检查是否已有 watchdog 在运行，没有则 fork 一个。
