@@ -34,6 +34,10 @@ type receiverState struct {
 
 	pendingTable      []string  // 等待更多流式行的 markdown 表格
 	pendingTableSince time.Time // pendingTable 首次出现时间
+
+	pendingCode      []string // 等待闭合的流式代码块
+	pendingCodeLang  string
+	pendingCodeSince time.Time
 }
 
 // BridgeConfig 创建 Bridge 所需的全部配置
@@ -441,7 +445,7 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 		state.mu.Lock()
 		if !state.ready || filtered == state.lastPane {
 			state.mu.Unlock()
-			if b.flushPendingTableIfReady(ctx, key, state, 5*time.Second) {
+			if b.flushPendingTableIfReady(ctx, key, state, 5*time.Second) || b.flushPendingCodeIfReady(ctx, key, state, 5*time.Second) {
 				hasDiff = true
 			}
 			return true
@@ -573,6 +577,21 @@ func (b *Bridge) flushPendingTableIfReady(ctx context.Context, key receiverKey, 
 	return true
 }
 
+func (b *Bridge) flushPendingCodeIfReady(ctx context.Context, key receiverKey, state *receiverState, wait time.Duration) bool {
+	state.sendMu.Lock()
+	defer state.sendMu.Unlock()
+	if len(state.pendingCode) == 0 || time.Since(state.pendingCodeSince) < wait {
+		return false
+	}
+
+	code := fencedCodeBlock(state.pendingCodeLang, state.pendingCode)
+	state.pendingCode = nil
+	state.pendingCodeLang = ""
+	state.pendingCodeSince = time.Time{}
+	b.sendMarkdownContent(ctx, key, state, code)
+	return true
+}
+
 func (b *Bridge) sendInteractiveTableOrMarkdown(ctx context.Context, key receiverKey, state *receiverState, table string) {
 	timeout := b.sendTimeout
 	if timeout <= 0 {
@@ -595,18 +614,22 @@ func (b *Bridge) sendInteractiveTableOrMarkdown(ctx context.Context, key receive
 
 func (b *Bridge) sendMarkdownBlocks(ctx context.Context, key receiverKey, state *receiverState, blocks []string) {
 	var newContent strings.Builder
-	for _, block := range blocks {
-		if block == "" {
-			continue
-		}
-		md := formatBlockToMarkdown(block)
+	appendMarkdown := func(md string) {
+		md = strings.TrimSpace(md)
 		if md == "" {
-			continue
+			return
 		}
 		if newContent.Len() > 0 {
 			newContent.WriteString("\n")
 		}
 		newContent.WriteString(md)
+	}
+
+	for _, block := range blocks {
+		if block == "" {
+			continue
+		}
+		b.appendMarkdownBlock(ctx, key, state, block, appendMarkdown)
 	}
 	if newContent.Len() == 0 {
 		return
@@ -617,6 +640,51 @@ func (b *Bridge) sendMarkdownBlocks(ctx context.Context, key receiverKey, state 
 	}
 
 	b.sendMarkdownContent(ctx, key, state, incoming)
+}
+
+func (b *Bridge) appendMarkdownBlock(ctx context.Context, key receiverKey, state *receiverState, block string, appendMarkdown func(string)) {
+	_ = ctx
+	_ = key
+
+	for {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			return
+		}
+
+		if state.pendingCodeLang != "" {
+			done, remainder := appendPendingCodeLines(state, strings.Split(block, "\n"))
+			if done != "" {
+				appendMarkdown(done)
+			}
+			if strings.TrimSpace(remainder) == "" {
+				return
+			}
+			block = remainder
+			continue
+		}
+
+		prefix, codeLines, ok := splitStreamingJSONStart(block)
+		if ok && !isJSONCodeComplete(codeLines) {
+			appendMarkdown(formatBlockToMarkdown(prefix))
+			state.pendingCodeLang = "json"
+			state.pendingCode = append([]string(nil), codeLines...)
+			state.pendingCodeSince = time.Now()
+			return
+		}
+
+		prefix, codeLines, ok = splitStreamingGoStart(block)
+		if ok && !isGoCodeComplete(codeLines) {
+			appendMarkdown(formatBlockToMarkdown(prefix))
+			state.pendingCodeLang = "go"
+			state.pendingCode = append([]string(nil), codeLines...)
+			state.pendingCodeSince = time.Now()
+			return
+		}
+
+		appendMarkdown(formatBlockToMarkdown(block))
+		return
+	}
 }
 
 func (b *Bridge) sendMarkdownContent(ctx context.Context, key receiverKey, state *receiverState, incoming string) {
@@ -686,7 +754,7 @@ func (b *Bridge) sendMarkdownChunk(ctx context.Context, key receiverKey, state *
 // splitDiffIntoBlocks 将 diff 内容按消息类型拆分为多个块
 // 连续的 Markdown 表格行作为一个块，其他行作为普通文本块
 func splitDiffIntoBlocks(diff string) []string {
-	lines := strings.Split(diff, "\n")
+	lines := reflowWrappedMarkdownTableLines(strings.Split(diff, "\n"))
 	var blocks []string
 	var textBuf []string
 	var tableBuf []string
@@ -722,6 +790,39 @@ func splitDiffIntoBlocks(diff string) []string {
 	flushText()
 	flushTable()
 	return blocks
+}
+
+func reflowWrappedMarkdownTableLines(lines []string) []string {
+	var result []string
+	var current string
+
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if current != "" {
+			if line == "" {
+				result = append(result, current, raw)
+				current = ""
+				continue
+			}
+			current += " " + line
+			if strings.HasSuffix(line, "|") {
+				result = append(result, current)
+				current = ""
+			}
+			continue
+		}
+
+		if strings.HasPrefix(line, "|") && !strings.HasSuffix(line, "|") {
+			current = line
+			continue
+		}
+		result = append(result, raw)
+	}
+
+	if current != "" {
+		result = append(result, current)
+	}
+	return result
 }
 
 func isMarkdownTableLine(line string) bool {
@@ -1001,9 +1102,341 @@ func parseTableCells(line string) []string {
 }
 
 // formatBlockToMarkdown 把单个 block 转为 markdown 格式。
-// 表格块保持 markdown 表格；其他内容直接以纯文本发送（lark_md 会渲染基础 markdown）。
+// 表格块保持 markdown 表格；其他内容直接以富文本 Markdown 发送。
 func formatBlockToMarkdown(block string) string {
-	return strings.TrimSpace(block)
+	block = strings.TrimSpace(block)
+	if block == "" || strings.Contains(block, "```") {
+		return block
+	}
+	if fenced := fenceJSONLikeBlock(block); fenced != block {
+		return fenced
+	}
+	return fenceGoLikeBlock(block)
+}
+
+func fenceJSONLikeBlock(block string) string {
+	lines := strings.Split(block, "\n")
+	start := -1
+	for i, line := range lines {
+		if isJSONBlockStart(line) {
+			start = i
+			break
+		}
+	}
+	if start < 0 || len(lines)-start < 4 {
+		return block
+	}
+
+	codeLines := append([]string(nil), lines[start:]...)
+	codeLines[0] = normalizeCodeStartLine(codeLines[0])
+	jsonLike := 0
+	for _, line := range codeLines {
+		if isJSONLikeLine(line) {
+			jsonLike++
+		}
+	}
+	if jsonLike*2 < len(codeLines) {
+		return block
+	}
+
+	code := strings.TrimSpace(strings.Join(codeLines, "\n"))
+	if code == "" {
+		return block
+	}
+	fenced := "```json\n" + code + "\n```"
+	prefix := strings.TrimSpace(strings.Join(lines[:start], "\n"))
+	if prefix == "" {
+		return fenced
+	}
+	return prefix + "\n\n" + fenced
+}
+
+func splitStreamingJSONStart(block string) (string, []string, bool) {
+	lines := strings.Split(strings.TrimSpace(block), "\n")
+	for i, line := range lines {
+		if !isJSONBlockStart(line) {
+			continue
+		}
+		codeLines := append([]string(nil), lines[i:]...)
+		codeLines[0] = normalizeCodeStartLine(codeLines[0])
+		return strings.TrimSpace(strings.Join(lines[:i], "\n")), codeLines, true
+	}
+	return "", nil, false
+}
+
+func appendPendingCodeLines(state *receiverState, lines []string) (string, string) {
+	for i, line := range lines {
+		state.pendingCode = append(state.pendingCode, line)
+		if isPendingCodeComplete(state.pendingCodeLang, state.pendingCode) {
+			done := fencedCodeBlock(state.pendingCodeLang, state.pendingCode)
+			state.pendingCode = nil
+			state.pendingCodeLang = ""
+			state.pendingCodeSince = time.Time{}
+			remainder := strings.TrimSpace(strings.Join(lines[i+1:], "\n"))
+			return done, remainder
+		}
+	}
+	return "", ""
+}
+
+func isPendingCodeComplete(lang string, lines []string) bool {
+	switch lang {
+	case "json":
+		return isJSONCodeComplete(lines)
+	case "go":
+		return isGoCodeComplete(lines)
+	default:
+		return len(lines) > 0
+	}
+}
+
+func isJSONCodeComplete(lines []string) bool {
+	code := strings.TrimSpace(strings.Join(lines, "\n"))
+	if code == "" {
+		return false
+	}
+	if jsonBracketBalance(code) > 0 {
+		return false
+	}
+	return strings.HasSuffix(code, "}") || strings.HasSuffix(code, "]")
+}
+
+func isGoCodeComplete(lines []string) bool {
+	if len(lines) < 4 {
+		return false
+	}
+	codeLike := 0
+	for _, line := range lines {
+		if isGoCodeLine(line) {
+			codeLike++
+		}
+	}
+	if codeLike < 4 {
+		return false
+	}
+	return goBraceBalance(lines) <= 0
+}
+
+func fencedCodeBlock(lang string, lines []string) string {
+	code := strings.TrimSpace(strings.Join(lines, "\n"))
+	if code == "" {
+		return ""
+	}
+	if lang == "" {
+		return "```\n" + code + "\n```"
+	}
+	return "```" + lang + "\n" + code + "\n```"
+}
+
+func jsonBracketBalance(s string) int {
+	balance := 0
+	inString := false
+	escaped := false
+	for _, r := range s {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inString {
+			if r == '\\' {
+				escaped = true
+			} else if r == '"' {
+				inString = false
+			}
+			continue
+		}
+		switch r {
+		case '"':
+			inString = true
+		case '{', '[':
+			balance++
+		case '}', ']':
+			balance--
+		}
+	}
+	return balance
+}
+
+func goBraceBalance(lines []string) int {
+	balance := 0
+	inString := false
+	inRawString := false
+	escaped := false
+	for _, line := range lines {
+		for _, r := range line {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if inRawString {
+				if r == '`' {
+					inRawString = false
+				}
+				continue
+			}
+			if inString {
+				if r == '\\' {
+					escaped = true
+				} else if r == '"' {
+					inString = false
+				}
+				continue
+			}
+			switch r {
+			case '`':
+				inRawString = true
+			case '"':
+				inString = true
+			case '{':
+				balance++
+			case '}':
+				balance--
+			}
+		}
+	}
+	return balance
+}
+
+func isJSONBlockStart(line string) bool {
+	trimmed := normalizeCodeStartLine(line)
+	return trimmed == "{" || trimmed == "["
+}
+
+func normalizeCodeStartLine(line string) string {
+	trimmed := strings.TrimSpace(line)
+	for {
+		next := strings.TrimSpace(strings.TrimLeft(trimmed, "🔘○●◉⦿◦•"))
+		if next == trimmed {
+			return trimmed
+		}
+		trimmed = next
+	}
+}
+
+func isJSONLikeLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return true
+	}
+	if trimmed == "{" || trimmed == "}" || trimmed == "[" || trimmed == "]" || trimmed == "}," || trimmed == "]," {
+		return true
+	}
+	if strings.HasPrefix(trimmed, `"`) || strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "}") ||
+		strings.HasPrefix(trimmed, "[") || strings.HasPrefix(trimmed, "]") {
+		return true
+	}
+	return strings.HasSuffix(trimmed, ",") && (strings.Contains(trimmed, `":`) || strings.Contains(trimmed, `": `))
+}
+
+func fenceGoLikeBlock(block string) string {
+	lines := strings.Split(block, "\n")
+	start := -1
+	for i, line := range lines {
+		if isGoCodeStartLine(line) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return block
+	}
+
+	end := start
+	codeLike := 0
+	braceBalance := 0
+	for i := start; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if i > start && codeLike >= 4 && braceBalance <= 0 && isLikelyProseLine(line) {
+			break
+		}
+		if isGoCodeLine(line) {
+			codeLike++
+		}
+		braceBalance += strings.Count(line, "{") - strings.Count(line, "}")
+		end = i + 1
+	}
+	if end-start < 4 || codeLike < 4 {
+		return block
+	}
+
+	code := strings.TrimSpace(strings.Join(lines[start:end], "\n"))
+	if code == "" {
+		return block
+	}
+	fenced := "```go\n" + code + "\n```"
+	prefix := strings.TrimSpace(strings.Join(lines[:start], "\n"))
+	suffix := strings.TrimSpace(strings.Join(lines[end:], "\n"))
+	if prefix != "" {
+		fenced = prefix + "\n\n" + fenced
+	}
+	if suffix != "" {
+		fenced += "\n\n" + suffix
+	}
+	return fenced
+}
+
+func splitStreamingGoStart(block string) (string, []string, bool) {
+	lines := strings.Split(strings.TrimSpace(block), "\n")
+	for i, line := range lines {
+		if !isGoCodeStartLine(line) {
+			continue
+		}
+		return strings.TrimSpace(strings.Join(lines[:i], "\n")), append([]string(nil), lines[i:]...), true
+	}
+	return "", nil, false
+}
+
+func isGoCodeStartLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.HasPrefix(trimmed, "package ") ||
+		strings.HasPrefix(trimmed, "import ") ||
+		strings.HasPrefix(trimmed, "func ") ||
+		(strings.HasPrefix(trimmed, "type ") && strings.Contains(trimmed, " struct"))
+}
+
+func isGoCodeLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return true
+	}
+	if isGoCodeStartLine(trimmed) {
+		return true
+	}
+	if strings.HasPrefix(trimmed, `"`) || strings.HasPrefix(trimmed, "//") {
+		return true
+	}
+	if strings.HasPrefix(trimmed, "}") || strings.HasPrefix(trimmed, "{") || trimmed == ")" || trimmed == "(" {
+		return true
+	}
+	if strings.Contains(trimmed, ":=") || strings.Contains(trimmed, " := ") || strings.Contains(trimmed, " = ") ||
+		strings.Contains(trimmed, ".") || strings.Contains(trimmed, "(") || strings.Contains(trimmed, ")") ||
+		strings.Contains(trimmed, "`") {
+		return true
+	}
+	return false
+}
+
+func isLikelyProseLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	if !containsCJK(trimmed) {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "//") {
+		return false
+	}
+	return !strings.ContainsAny(trimmed, "{}();:=`\"")
+}
+
+func containsCJK(s string) bool {
+	for _, r := range s {
+		if (r >= '\u4e00' && r <= '\u9fff') || (r >= '\u3400' && r <= '\u4dbf') {
+			return true
+		}
+	}
+	return false
 }
 
 func compactMarkdownSpacing(content string) string {

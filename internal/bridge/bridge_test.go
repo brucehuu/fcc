@@ -413,6 +413,37 @@ func TestSplitDiffIntoBlocksEdgeCases(t *testing.T) {
 	}
 }
 
+func TestSplitDiffIntoBlocksReflowsWrappedMarkdownTableRows(t *testing.T) {
+	input := strings.Join([]string{
+		"intro",
+		"| 维度 | 优点 | 缺点 |",
+		"| --- | --- | --- |",
+		"| 架构设计 | 模块划分清晰（bot/bridge/terminal/tray/updater/watchdog/config/log），职责边界明确；通过",
+		"Messenger / Terminal",
+		"接口抽象实现飞书与终端的解耦 | bridge.go 单文件 1237 行，承载了",
+		"diff、过滤、格式化、发送、累积等过多职责 |",
+		"outro",
+	}, "\n")
+
+	got := splitDiffIntoBlocks(input)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 blocks, got %d: %#v", len(got), got)
+	}
+	if got[0] != "intro" || got[2] != "outro" {
+		t.Fatalf("text blocks = %#v, want intro/table/outro", got)
+	}
+	if !isMarkdownTable(got[1]) {
+		t.Fatalf("middle block should be markdown table:\n%s", got[1])
+	}
+	lines := strings.Split(got[1], "\n")
+	if len(lines) != 3 {
+		t.Fatalf("table lines = %d, want 3: %#v", len(lines), lines)
+	}
+	if cells := parseTableCells(lines[2]); len(cells) != 3 {
+		t.Fatalf("row cells = %#v, want 3 cells", cells)
+	}
+}
+
 func TestFlushTableEdgeCases(t *testing.T) {
 	// single column table: should add separator row
 	got := flushTable([]string{"| A |"})
@@ -441,6 +472,190 @@ func TestCompactMarkdownSpacing(t *testing.T) {
 	want := "hello\n\nworld\n\n- a\n\n- b"
 	if got := compactMarkdownSpacing(input); got != want {
 		t.Errorf("compactMarkdownSpacing() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatBlockToMarkdownFencesJSONLikeBlock(t *testing.T) {
+	input := strings.Join([]string{
+		"输出：飞书 Interactive 卡片 JSON",
+		"{",
+		`"config": {`,
+		`"wide_screen_mode": true`,
+		"},",
+		`"elements": [`,
+		"]",
+		"}",
+	}, "\n")
+
+	got := formatBlockToMarkdown(input)
+	if !strings.Contains(got, "```json\n{") {
+		t.Fatalf("expected fenced json block, got:\n%s", got)
+	}
+	if !strings.HasSuffix(got, "\n```") {
+		t.Fatalf("expected closing code fence, got:\n%s", got)
+	}
+	if !strings.HasPrefix(got, "输出：飞书 Interactive 卡片 JSON\n\n") {
+		t.Fatalf("expected prefix to be preserved, got:\n%s", got)
+	}
+}
+
+func TestFormatBlockToMarkdownKeepsExistingFence(t *testing.T) {
+	input := "```json\n{}\n```"
+	if got := formatBlockToMarkdown(input); got != input {
+		t.Fatalf("formatBlockToMarkdown() = %q, want %q", got, input)
+	}
+}
+
+func TestFormatBlockToMarkdownFencesGoCodeBlock(t *testing.T) {
+	input := strings.Join([]string{
+		"这是一个 Go 语言 HTTP 服务器的代码片段：",
+		"package main",
+		"import (",
+		`"encoding/json"`,
+		`"net/http"`,
+		")",
+		"type Response struct {",
+		"Message string `json:\"message\"`",
+		"}",
+		"func main() {",
+		`http.HandleFunc("/health", nil)`,
+		"}",
+		"如果你有特定的编程语言或功能需求，告诉我。",
+	}, "\n")
+
+	got := formatBlockToMarkdown(input)
+	if !strings.Contains(got, "```go\npackage main") {
+		t.Fatalf("expected fenced go block, got:\n%s", got)
+	}
+	if !strings.Contains(got, "\n```\n\n如果你有特定的编程语言或功能需求，告诉我。") {
+		t.Fatalf("expected prose suffix outside fence, got:\n%s", got)
+	}
+}
+
+func TestSendMarkdownBlocksBuffersStreamingJSONUntilClosed(t *testing.T) {
+	ms := &mockMessenger{}
+	b := &Bridge{
+		messenger:   ms,
+		sendTimeout: 10 * time.Second,
+	}
+	key := receiverKey{id: "user1", kind: "open_id"}
+	state := &receiverState{}
+	b.receivers.Store(key, state)
+
+	ctx := context.Background()
+	b.sendMarkdownBlocks(ctx, key, state, []string{strings.Join([]string{
+		"显示一段Json",
+		"🔘 {",
+		`"project": {`,
+		`"name": "api-gateway"`,
+		"},",
+		`"servers": [`,
+	}, "\n")})
+	if state.pendingCodeLang != "json" {
+		t.Fatalf("expected pending json, got lang=%q", state.pendingCodeLang)
+	}
+
+	b.sendMarkdownBlocks(ctx, key, state, []string{strings.Join([]string{
+		"{",
+		`"id": "srv-001",`,
+		`"host": "10.0.1.15"`,
+		"},",
+		"{",
+		`"id": "srv-002",`,
+		`"host": "10.0.1.16"`,
+		"}",
+		"],",
+		`"status": "active"`,
+		"}",
+	}, "\n")})
+
+	texts := ms.Texts()
+	if len(texts) == 0 {
+		t.Fatal("expected markdown text after json closes")
+	}
+	got := texts[len(texts)-1]
+	if strings.Count(got, "```json") != 1 || !strings.HasSuffix(got, "\n```") {
+		t.Fatalf("expected one json fence, got:\n%s", got)
+	}
+	if strings.Contains(got, "🔘") {
+		t.Fatalf("expected status marker removed from code, got:\n%s", got)
+	}
+}
+
+func TestSendMarkdownBlocksBuffersStreamingGoUntilFunctionCloses(t *testing.T) {
+	ms := &mockMessenger{}
+	b := &Bridge{
+		messenger:   ms,
+		sendTimeout: 10 * time.Second,
+	}
+	key := receiverKey{id: "user1", kind: "open_id"}
+	state := &receiverState{}
+	b.receivers.Store(key, state)
+
+	ctx := context.Background()
+	b.sendMarkdownBlocks(ctx, key, state, []string{strings.Join([]string{
+		"worker 从 jobs 通道接收任务，处理后将结果发送到 results 通道",
+		"func worker(id int, jobs <-chan Job, results chan<- Result, wg *sync.WaitGroup) {",
+		"defer wg.Done()",
+		"for job := range jobs {",
+		`fmt.Printf("Worker %d 正在处理 Job %d\n", id, job.ID)`,
+	}, "\n")})
+	if state.pendingCodeLang != "go" {
+		t.Fatalf("expected pending go, got lang=%q", state.pendingCodeLang)
+	}
+	if len(ms.Texts()) == 0 || strings.Contains(ms.Texts()[len(ms.Texts())-1], "```go") {
+		t.Fatalf("first chunk should not send incomplete go fence, texts=%v", ms.Texts())
+	}
+
+	b.sendMarkdownBlocks(ctx, key, state, []string{strings.Join([]string{
+		"// 模拟耗时操作：计算 1 到 Value 的和",
+		"sum := 0",
+		"for i := 1; i <= job.Value; i++ {",
+		"sum += i",
+		"time.Sleep(10 * time.Millisecond) // 模拟工作负载",
+		"}",
+		"results <- Result{JobID: job.ID, Sum: sum}",
+		"}",
+		"}",
+		"后续说明文字",
+	}, "\n")})
+
+	texts := ms.Texts()
+	if len(texts) == 0 {
+		t.Fatal("expected markdown text after go function closes")
+	}
+	got := texts[len(texts)-1]
+	if strings.Count(got, "```go") != 1 || !strings.Contains(got, "// 模拟耗时操作") {
+		t.Fatalf("expected one complete go fence with comments, got:\n%s", got)
+	}
+	if !strings.Contains(got, "\n```\n后续说明文字") {
+		t.Fatalf("expected suffix outside go fence, got:\n%s", got)
+	}
+}
+
+func TestFlushPendingCodeIfReady(t *testing.T) {
+	ms := &mockMessenger{}
+	b := &Bridge{
+		messenger:   ms,
+		sendTimeout: 10 * time.Second,
+	}
+	key := receiverKey{id: "user1", kind: "open_id"}
+	state := &receiverState{
+		pendingCodeLang:  "go",
+		pendingCode:      []string{"func main() {", `fmt.Println("hi")`},
+		pendingCodeSince: time.Now().Add(-6 * time.Second),
+	}
+	b.receivers.Store(key, state)
+
+	if !b.flushPendingCodeIfReady(context.Background(), key, state, 5*time.Second) {
+		t.Fatal("expected pending code to flush")
+	}
+	texts := ms.Texts()
+	if len(texts) != 1 || !strings.Contains(texts[0], "```go\nfunc main()") {
+		t.Fatalf("texts = %v", texts)
+	}
+	if len(state.pendingCode) != 0 || state.pendingCodeLang != "" {
+		t.Fatalf("pending code not cleared: %#v", state)
 	}
 }
 

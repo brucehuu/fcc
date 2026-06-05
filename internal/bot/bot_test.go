@@ -72,10 +72,9 @@ func TestBuildTableCard(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:     "empty header",
-			input:    "| | |\n| --- | --- |",
-			wantErr:  false,
-			wantRows: 0,
+			name:    "header only",
+			input:   "| A | B |\n| --- | --- |",
+			wantErr: true,
 		},
 		{
 			name:     "column padding",
@@ -119,5 +118,19 @@ func TestBuildTableCard(t *testing.T) {
 				t.Errorf("rows = %v, want %d rows", table["rows"], tt.wantRows)
 			}
 		})
+	}
+}
+
+func TestBuildInteractiveCardUsesMarkdownComponent(t *testing.T) {
+	card := buildInteractiveCard("```json\n{}\n```")
+	elements, ok := card["elements"].([]map[string]interface{})
+	if !ok || len(elements) != 1 {
+		t.Fatalf("elements = %v", card["elements"])
+	}
+	if elements[0]["tag"] != "markdown" {
+		t.Fatalf("tag = %v, want markdown", elements[0]["tag"])
+	}
+	if elements[0]["content"] != "```json\n{}\n```" {
+		t.Fatalf("content = %v", elements[0]["content"])
 	}
 }

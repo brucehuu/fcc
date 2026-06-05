@@ -321,11 +321,9 @@ func buildInteractiveCard(text string) map[string]interface{} {
 		},
 		"elements": []map[string]interface{}{
 			{
-				"tag": "div",
-				"text": map[string]interface{}{
-					"tag":     "lark_md",
-					"content": text,
-				},
+				"tag":       "markdown",
+				"content":   text,
+				"text_size": "normal",
 			},
 		},
 	}
@@ -513,6 +511,9 @@ func buildTableCard(markdownTable string) (map[string]interface{}, error) {
 			row[fmt.Sprintf("col_%d", j)] = cell
 		}
 		rows = append(rows, row)
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("table has no data rows")
 	}
 
 	return map[string]interface{}{
