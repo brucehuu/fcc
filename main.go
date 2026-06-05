@@ -216,6 +216,33 @@ func main() {
 		}
 	}()
 
+	// Daemonize: fork to background so terminal returns immediately.
+	if os.Getenv("FCC_DAEMONIZED") != "1" {
+		exe, err := os.Executable()
+		if err == nil {
+			_ = os.MkdirAll("log", 0755)
+			logFile, err := os.OpenFile("log/fcc.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				logFile = os.Stderr
+			}
+			cmd := exec.Command(exe, os.Args[1:]...)
+			cmd.Env = append(os.Environ(), "FCC_DAEMONIZED=1")
+			cmd.Stdin = nil
+			cmd.Stdout = nil
+			cmd.Stderr = logFile
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: 0}
+			if err := cmd.Start(); err == nil {
+				fmt.Println("fcc started in the background")
+				fmt.Println("  Click the fcc icon in the menu bar for config or quit")
+				fmt.Println("  To view the terminal: tmux attach -t fcc")
+				os.Exit(0)
+			}
+			if logFile != os.Stderr {
+				_ = logFile.Close()
+			}
+		}
+	}
+
 	fmt.Println()
 	fmt.Println("[main] fcc is running in the background")
 	fmt.Println("  Use Feishu/Lark to interact with your AI tool")
