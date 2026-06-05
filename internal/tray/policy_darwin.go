@@ -38,6 +38,22 @@ static int setFinderIcon(const char *filePath, const void *pngData, int pngLen) 
 	BOOL ok = [[NSWorkspace sharedWorkspace] setIcon:img forFile:path options:0];
 	return ok ? 1 : 0;
 }
+
+// hideMinimizeAndZoomButtons 隐藏 NSWindow 的最小化和最大化按钮，只保留关闭按钮。
+static void hideMinimizeAndZoomButtons(void *windowPtr) {
+	NSWindow *window = (__bridge NSWindow *)windowPtr;
+	if (window == nil) {
+		return;
+	}
+	NSButton *miniaturizeButton = [window standardWindowButton:NSWindowMiniaturizeButton];
+	if (miniaturizeButton != nil) {
+		[miniaturizeButton setHidden:YES];
+	}
+	NSButton *zoomButton = [window standardWindowButton:NSWindowZoomButton];
+	if (zoomButton != nil) {
+		[zoomButton setHidden:YES];
+	}
+}
 */
 import "C"
 
@@ -73,4 +89,9 @@ func SetFinderIcon(filePath string, pngBytes []byte) error {
 		return fmt.Errorf("setFinderIcon failed")
 	}
 	return nil
+}
+
+// HideMinimizeAndZoomButtons 隐藏窗口的最小化和最大化按钮，只保留关闭按钮。
+func HideMinimizeAndZoomButtons(window unsafe.Pointer) {
+	C.hideMinimizeAndZoomButtons(window)
 }

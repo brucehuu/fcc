@@ -28,7 +28,7 @@ const (
 	configWindowTitle   = "fcc — Config"
 	firstRunWindowTitle = "fcc — First Run Setup"
 	configWidth         = 520
-	configHeight        = 640
+	configHeight        = 520
 	configWindowFlag    = "--config-window"
 )
 
@@ -93,6 +93,7 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 		w.SetTitle(configWindowTitle)
 	}
 	w.SetSize(configWidth, configHeight, webview.HintFixed)
+	HideMinimizeAndZoomButtons(w.Window())
 	w.SetHtml(configHTML())
 
 	w.Bind("loadConfig", func() map[string]interface{} {
@@ -220,6 +221,10 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 			return map[string]interface{}{"success": false, "error": err.Error()}
 		}
 		return map[string]interface{}{"success": true}
+	})
+
+	w.Bind("closeWindow", func() {
+		go w.Terminate()
 	})
 
 	w.Bind("testMessage", func(appID, appSecret, targetName string) map[string]interface{} {
@@ -490,7 +495,7 @@ func configHTML() string {
     <div class="field">
       <label for="targetName">Feishu Account Name</label>
       <input type="text" id="targetName" placeholder="Enter name to send test message to">
-      <button id="testBtn" onclick="doTestMessage()" style="background:#34c759; margin-top:10px;">Test Message</button>
+      <button id="testBtn" onclick="doTestMessage()" style="background:#34c759; margin-top:16px;">Test Message</button>
       <div id="testStatus" style="margin-top:6px; font-size:12px; min-height:18px;"></div>
     </div>
 
@@ -538,6 +543,13 @@ func configHTML() string {
 
   <script>
     const $ = id => document.getElementById(id);
+
+    document.addEventListener('keydown', function(e) {
+      if (e.metaKey && e.key === 'w') {
+        e.preventDefault();
+        window.closeWindow();
+      }
+    });
 
     function setStatus(text, isError) {
       const activeTab = document.querySelector('.tab-content.active');

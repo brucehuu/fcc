@@ -53,9 +53,9 @@ func Run(cfg Config) {
 			systray.AddSeparator()
 		}
 
-		mConfig := systray.AddMenuItem(menuTitleConfig, "Open fcc configuration page")
+		mConfig := systray.AddMenuItem(menuTitleConfig, "")
 		systray.AddSeparator()
-		mQuit := systray.AddMenuItem(menuTitleExit, "Stop fcc and tmux session")
+		mQuit := systray.AddMenuItem(menuTitleExit, "")
 
 		go handleClicks(mConfig.ClickedCh, mQuit.ClickedCh, cfg)
 	}, cfg.OnExit)
