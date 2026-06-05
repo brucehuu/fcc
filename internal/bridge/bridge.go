@@ -27,6 +27,10 @@ type receiverState struct {
 	ready    bool // baseline 是否已初始化，防止竞态发送完整 pane
 	mu       sync.Mutex
 	sendMu   sync.Mutex
+
+	// 累积消息模式：所有内容追加到一条 markdown 消息中
+	messageID  string        // 当前累积消息的 open_message_id
+	contentBuf strings.Builder // 累积的 markdown 内容
 }
 
 // BridgeConfig 创建 Bridge 所需的全部配置
@@ -247,6 +251,13 @@ func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 		return
 	}
 
+	// 每次收到飞书新消息，重置累积状态，下次 diff 会新开一个 interactive
+	s := state.(*receiverState)
+	s.sendMu.Lock()
+	s.messageID = ""
+	s.contentBuf.Reset()
+	s.sendMu.Unlock()
+
 	b.metrics.messagesReceived.Add(1)
 	log.Debugf("[bridge] sending to tmux: %q", log.Truncate(text, 80))
 	b.termMu.RLock()
@@ -450,41 +461,87 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 	return hasDiff
 }
 
-// sendBlocks 在独立 goroutine 中把 diff 按消息块拆分并发送
+const maxMarkdownLen = 3000 // interactive 卡片 JSON 有长度限制，内容留余量
+
+// sendBlocks 把 diff 内容格式化为 markdown 并追加到 receiver 的累积 buffer 中，
+// 然后更新已有消息或发送新消息。所有内容最终只体现在一条不断追加的消息里。
 func (b *Bridge) sendBlocks(ctx context.Context, key receiverKey, diff string) {
 	blocks := splitDiffIntoBlocks(diff)
+
+	// sendMu 已锁定，串行访问 contentBuf 和 messageID
+	val, _ := b.receivers.Load(key)
+	state := val.(*receiverState)
+
+	var newContent strings.Builder
 	for _, block := range blocks {
 		if block == "" {
 			continue
 		}
-		b.sendBlock(ctx, block, key)
+		md := formatBlockToMarkdown(block)
+		if md == "" {
+			continue
+		}
+		if newContent.Len() > 0 {
+			newContent.WriteString("\n\n")
+		}
+		newContent.WriteString(md)
 	}
-}
+	if newContent.Len() == 0 {
+		return
+	}
 
-func (b *Bridge) sendBlock(ctx context.Context, block string, key receiverKey) {
+	// 追加到累积 buffer
+	if state.contentBuf.Len() > 0 {
+		state.contentBuf.WriteString("\n\n")
+	}
+	state.contentBuf.WriteString(newContent.String())
+
+	// 截断过长的内容（从头部截断，保留尾部最新内容）
+	content := state.contentBuf.String()
+	if len(content) > maxMarkdownLen {
+		content = truncateMarkdownContent(content, maxMarkdownLen)
+		state.contentBuf.Reset()
+		state.contentBuf.WriteString(content)
+	}
+
+	// 发送或更新
 	timeout := b.sendTimeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	sendCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if isMarkdownTable(block) {
-		// 表格用 interactive 卡片消息发送，column_set 模拟表格渲染
-		if err := b.messenger.SendInteractiveTable(ctx, key.kind, key.id, block); err != nil {
-			log.Warnf("[bridge] interactive table failed: %v, falling back to text", err)
-			if err := b.messenger.SendText(ctx, key.kind, key.id, block); err != nil {
-				log.Warnf("[bridge] text fallback also failed: %v", err)
+	if state.messageID != "" {
+		if err := b.messenger.UpdateMessage(sendCtx, state.messageID, content); err != nil {
+			log.Warnf("[bridge] update message failed: %v, opening new card", err)
+
+			// 旧卡片已无法更新（可能内容超限），清空累积，只发本次 diff
+			state.messageID = ""
+			state.contentBuf.Reset()
+
+			// 本次 diff 单独发送，超长则截断
+			fresh := newContent.String()
+			if len(fresh) > maxMarkdownLen {
+				fresh = fresh[:maxMarkdownLen-20] + "\n...（内容已截断）"
+			}
+			msgID, err := b.messenger.SendMarkdown(sendCtx, key.kind, key.id, fresh)
+			if err != nil {
+				log.Warnf("[bridge] send new card failed: %v", err)
 			} else {
+				state.messageID = msgID
+				state.contentBuf.WriteString(fresh)
 				b.metrics.messagesSent.Add(1)
 			}
 		} else {
 			b.metrics.messagesSent.Add(1)
 		}
 	} else {
-		if err := b.messenger.SendText(ctx, key.kind, key.id, block); err != nil {
-			log.Warnf("[bridge] send text failed: %v", err)
+		msgID, err := b.messenger.SendMarkdown(sendCtx, key.kind, key.id, content)
+		if err != nil {
+			log.Warnf("[bridge] send markdown failed: %v", err)
 		} else {
+			state.messageID = msgID
 			b.metrics.messagesSent.Add(1)
 		}
 	}
@@ -716,6 +773,25 @@ func parseTableCells(line string) []string {
 	return cells
 }
 
+// formatBlockToMarkdown 把单个 block 转为 markdown 格式。
+// 表格块保持 markdown 表格；其他内容直接以纯文本发送（lark_md 会渲染基础 markdown）。
+func formatBlockToMarkdown(block string) string {
+	return strings.TrimSpace(block)
+}
+
+// truncateMarkdownContent 从头部截断内容，保留尾部。
+// 截断位置尽量选在换行处，避免破坏代码块。
+func truncateMarkdownContent(content string, maxLen int) string {
+	if len(content) <= maxLen {
+		return content
+	}
+	cutoff := len(content) - maxLen + 50 // 留 50 字符给提示
+	if idx := strings.Index(content[cutoff:], "\n"); idx >= 0 {
+		cutoff += idx + 1
+	}
+	return "...（前面内容已省略）\n\n" + content[cutoff:]
+}
+
 func flushTable(lines []string) []string {
 	if len(lines) == 0 {
 		return nil
@@ -859,8 +935,13 @@ func (b *Bridge) RestartTmux(workDir string) error {
 
 	// 重置所有 receiver 的 baseline，防止新旧 tmux 内容 diff 错误。
 	// lastPane 设为空字符串，下一次 diff 会发送完整 pane 内容。
+	// 同时清空累积消息，避免旧内容和新 session 混在一起。
 	b.receivers.Range(func(k, v interface{}) bool {
 		state := v.(*receiverState)
+		state.sendMu.Lock()
+		state.messageID = ""
+		state.contentBuf.Reset()
+		state.sendMu.Unlock()
 		state.mu.Lock()
 		state.lastPane = ""
 		state.ready = true

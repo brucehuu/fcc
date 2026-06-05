@@ -369,6 +369,18 @@ func (m *mockMessenger) SendInteractiveTable(ctx context.Context, _, _, table st
 	m.tables = append(m.tables, table)
 	return nil
 }
+func (m *mockMessenger) SendMarkdown(ctx context.Context, _, _, text string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.texts = append(m.texts, text)
+	return "mock-msg-id", nil
+}
+func (m *mockMessenger) UpdateMessage(ctx context.Context, messageID, content string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.texts = append(m.texts, content)
+	return nil
+}
 func (m *mockMessenger) SendWelcome(ctx context.Context, targetName, text string) error { return nil }
 func (m *mockMessenger) CleanupOldImages(maxAge time.Duration) error { return nil }
 func (m *mockMessenger) Close() {}
@@ -442,7 +454,7 @@ func TestCaptureAndSend(t *testing.T) {
 		t.Errorf("tick 1: expected 0 messages, got %d", len(ms.Texts()))
 	}
 
-	// tick 2: diff = "foo"
+	// tick 2: diff = "foo", 文本内容直接发送
 	b.captureAndSend(ctx)
 	time.Sleep(50 * time.Millisecond)
 	texts := ms.Texts()
@@ -485,8 +497,13 @@ func TestCaptureAndSendTable(t *testing.T) {
 	b.captureAndSend(ctx)
 	time.Sleep(50 * time.Millisecond)
 
-	if len(ms.Tables()) != 1 {
-		t.Errorf("expected 1 table message, got %d tables", len(ms.Tables()))
+	// 表格现在通过 SendMarkdown 发送，不再走 SendInteractiveTable
+	if len(ms.Tables()) != 0 {
+		t.Errorf("expected 0 table messages (now sent as markdown), got %d", len(ms.Tables()))
+	}
+	texts := ms.Texts()
+	if len(texts) != 1 {
+		t.Errorf("expected 1 markdown message, got %d", len(texts))
 	}
 }
 

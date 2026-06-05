@@ -25,6 +25,9 @@ var genericStatusRe = regexp.MustCompile(`^\w+ing(?:\.\.\.|…).*(?:\(\d+[smh]\)
 // 特征：行首一个特殊符号 + 空格 + 单词 + for + 时间。
 var symbolWordForRe = regexp.MustCompile(`^[^a-zA-Z0-9\s_]\s+\w+\s+for\s+\d+[smh]`)
 
+// tipLineRe 匹配形如 "⎿  Tip: ..." 的 Claude TUI 提示行。
+var tipLineRe = regexp.MustCompile(`^⎿\s+Tip:`)
+
 // isClaudeDecorativeLine 判断一行是否是 Claude TUI 的纯装饰性状态行。
 // 这些行在终端中会被动态刷新覆盖，通过 tmux capture 抓到后不应发送到飞书，
 // 否则每次时间/token 计数变化都会产生一条无意义的飞书消息。
@@ -56,6 +59,11 @@ func isClaudeDecorativeLine(line string) bool {
 
 	// 规则5：形如 "✻ Crunched for 26s" 的 TUI 状态行
 	if symbolWordForRe.MatchString(line) {
+		return true
+	}
+
+	// 规则6：形如 "⎿  Tip: ..." 的 Claude TUI 提示行
+	if tipLineRe.MatchString(line) {
 		return true
 	}
 

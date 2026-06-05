@@ -10,6 +10,8 @@ import (
 type Messenger interface {
 	Start(ctx context.Context) error
 	SendText(ctx context.Context, receiveIDType, receiveID, text string) error
+	SendMarkdown(ctx context.Context, receiveIDType, receiveID, text string) (string, error)
+	UpdateMessage(ctx context.Context, messageID, content string) error
 	SendInteractiveTable(ctx context.Context, receiveIDType, receiveID, markdownTable string) error
 	SendWelcome(ctx context.Context, targetName, text string) error
 	CleanupOldImages(maxAge time.Duration) error

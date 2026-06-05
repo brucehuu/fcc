@@ -34,6 +34,25 @@ type TextContent struct {
 	Text string `json:"text"`
 }
 
+type MarkdownContent struct {
+	Text string `json:"text"`
+}
+
+// PostContent 飞书 post（富文本）消息类型的 content 结构
+type PostContent struct {
+	ZhCn PostLocale `json:"zh_cn"`
+}
+
+type PostLocale struct {
+	Title   string          `json:"title"`
+	Content [][]PostElement `json:"content"`
+}
+
+type PostElement struct {
+	Tag  string `json:"tag"`
+	Text string `json:"text"`
+}
+
 type ImageContent struct {
 	ImageKey string `json:"image_key"`
 }
@@ -289,6 +308,93 @@ func (b *Bot) SendText(ctx context.Context, receiveIDType, receiveID, text strin
 		}
 		if !resp.Success() {
 			return fmt.Errorf("send message failed: code=%d, msg=%s", resp.Code, resp.Msg)
+		}
+		return nil
+	})
+}
+
+// buildInteractiveCard 把 markdown 文本包进 interactive 卡片，用 lark_md 渲染。
+func buildInteractiveCard(text string) map[string]interface{} {
+	return map[string]interface{}{
+		"config": map[string]interface{}{
+			"wide_screen_mode": true,
+		},
+		"elements": []map[string]interface{}{
+			{
+				"tag": "div",
+				"text": map[string]interface{}{
+					"tag":     "lark_md",
+					"content": text,
+				},
+			},
+		},
+	}
+}
+
+// SendMarkdown 发送 interactive 卡片消息（lark_md 渲染 markdown），返回 message_id。
+func (b *Bot) SendMarkdown(ctx context.Context, receiveIDType, receiveID, text string) (string, error) {
+	var msgID string
+	err := b.sendWithRetry(ctx, "interactive", func(ctx context.Context) error {
+		card := buildInteractiveCard(text)
+		contentJSON, err := json.Marshal(card)
+		if err != nil {
+			return err
+		}
+
+		req := larkim.NewCreateMessageReqBuilder().
+			ReceiveIdType(receiveIDType).
+			Body(larkim.NewCreateMessageReqBodyBuilder().
+				ReceiveId(receiveID).
+				MsgType("interactive").
+				Content(string(contentJSON)).
+				Build()).
+			Build()
+
+		resp, err := b.client.Im.V1.Message.Create(ctx, req)
+		if err != nil {
+			return fmt.Errorf("send interactive failed: %w", err)
+		}
+		if !resp.Success() {
+			return fmt.Errorf("send interactive failed: code=%d, msg=%s", resp.Code, resp.Msg)
+		}
+		if resp.Data != nil && resp.Data.MessageId != nil {
+			msgID = *resp.Data.MessageId
+		}
+		return nil
+	})
+	return msgID, err
+}
+
+// UpdateMessage 更新已发送的 interactive 卡片内容。
+func (b *Bot) UpdateMessage(ctx context.Context, messageID, text string) error {
+	return b.sendWithRetry(ctx, "update_interactive", func(ctx context.Context) error {
+		card := buildInteractiveCard(text)
+		contentJSON, err := json.Marshal(card)
+		if err != nil {
+			return err
+		}
+
+		body := map[string]interface{}{
+			"content":  string(contentJSON),
+			"msg_type": "interactive",
+		}
+		path := fmt.Sprintf("/open-apis/im/v1/messages/%s", messageID)
+		resp, err := b.client.Patch(ctx, path, body, larkcore.AccessTokenTypeTenant)
+		if err != nil {
+			return fmt.Errorf("update interactive failed: %w", err)
+		}
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("update interactive failed: status=%d, body=%s", resp.StatusCode, string(resp.RawBody))
+		}
+		var result struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		if err := json.Unmarshal(resp.RawBody, &result); err != nil {
+			return fmt.Errorf("update interactive parse failed: %w", err)
+		}
+		if result.Code != 0 {
+			return fmt.Errorf("update interactive failed: code=%d, msg=%s", result.Code, result.Msg)
 		}
 		return nil
 	})
