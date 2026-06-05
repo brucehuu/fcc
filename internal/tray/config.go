@@ -260,58 +260,31 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 			return map[string]interface{}{"success": false, "error": "no members found in any chat"}
 		}
 
-		// If a target name is provided, find the matching member.
 		targetName = strings.TrimSpace(targetName)
-		if targetName != "" {
-			targetLower := strings.ToLower(targetName)
-			var matchedOpenID, matchedName string
-			matchCount := 0
-			for openID, name := range memberMap {
-				if strings.Contains(strings.ToLower(name), targetLower) {
-					matchedOpenID = openID
-					matchedName = name
-					matchCount++
-				}
-			}
-			if matchCount == 0 {
-				return map[string]interface{}{"success": false, "error": "no member named '" + targetName + "' found"}
-			}
-			if matchCount > 1 {
-				return map[string]interface{}{"success": false, "error": fmt.Sprintf("found %d members matching '%s', please use exact name", matchCount, targetName)}
-			}
-			if err := sendTestMessage(token, matchedOpenID); err != nil {
-				return map[string]interface{}{"success": false, "error": "send to " + matchedName + ": " + err.Error()}
-			}
-			return map[string]interface{}{"success": true, "message": "Message sent to " + matchedName}
+		if targetName == "" {
+			return map[string]interface{}{"success": false, "error": "please enter a Feishu account name to send test message to"}
 		}
 
-		// No target name: send to all unique members.
-		var successCount, failCount int
-		var firstError string
+		targetLower := strings.ToLower(targetName)
+		var matchedOpenID, matchedName string
+		matchCount := 0
 		for openID, name := range memberMap {
-			if err := sendTestMessage(token, openID); err != nil {
-				failCount++
-				if firstError == "" {
-					firstError = fmt.Sprintf("send to %s: %v", name, err)
-				}
-			} else {
-				successCount++
+			if strings.Contains(strings.ToLower(name), targetLower) {
+				matchedOpenID = openID
+				matchedName = name
+				matchCount++
 			}
 		}
-
-		msg := fmt.Sprintf("Sent to %d member(s)", successCount)
-		if failCount > 0 {
-			msg += fmt.Sprintf(", %d failed", failCount)
+		if matchCount == 0 {
+			return map[string]interface{}{"success": false, "error": "no member named '" + targetName + "' found"}
 		}
-
-		result := map[string]interface{}{
-			"success": successCount > 0,
-			"message": msg,
+		if matchCount > 1 {
+			return map[string]interface{}{"success": false, "error": fmt.Sprintf("found %d members matching '%s', please use exact name", matchCount, targetName)}
 		}
-		if successCount == 0 && firstError != "" {
-			result["error"] = firstError
+		if err := sendTestMessage(token, matchedOpenID); err != nil {
+			return map[string]interface{}{"success": false, "error": "send to " + matchedName + ": " + err.Error()}
 		}
-		return result
+		return map[string]interface{}{"success": true, "message": "Message sent to " + matchedName}
 	})
 
 	w.Run()
