@@ -287,6 +287,273 @@ func TestFilterPaneCodexPlainAlignedTable(t *testing.T) {
 	}
 }
 
+func TestFilterPaneCodexWidePlainTableWithWrappedCells(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"• 可以。当前我这边只看到你给的 AGENTS.md 指令，所以先按这个内容整理成表格：",
+		"",
+		"   范围                           规则                                    允许使用 seed 数据的情况                                         默认行为",
+		"  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+		"   /Users/huguobiao/code/fcc      不要用 seed 数据覆盖或刷新项目数据库    1. 首次部署且目标数据库完全为空；2. 你明确要求 reseed/refresh    保留现有项目数据，seed 脚本",
+		"   以及本机所有本地项目                                                                                                           应保持非破坏性",
+		"",
+		"如果你指的是上一轮某个具体结果，把要比较的内容或数据再发我一下，我可以直接按表格重做。",
+	}, "\n")
+	want := strings.Join([]string{
+		"• 可以。当前我这边只看到你给的 AGENTS.md 指令，所以先按这个内容整理成表格：",
+		"",
+		"| 范围 | 规则 | 允许使用 seed 数据的情况 | 默认行为 |",
+		"| --- | --- | --- | --- |",
+		"| /Users/huguobiao/code/fcc 以及本机所有本地项目 | 不要用 seed 数据覆盖或刷新项目数据库 | 1. 首次部署且目标数据库完全为空；2. 你明确要求 reseed/refresh | 保留现有项目数据，seed 脚本 应保持非破坏性 |",
+		"",
+		"如果你指的是上一轮某个具体结果，把要比较的内容或数据再发我一下，我可以直接按表格重做。",
+	}, "\n")
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexWideTableKeepsWrappedRowsTogether(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"• 方向                                                     优点                                                 缺点 / 风险                                          适合程度",
+		"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━",
+		"直接转发终端原始输出                    实现简单；最接近本地终端；不容易漏内容     手机飞书很难读；TUI 边框、提示、工具日志噪    低",
+		"                                                                                                                       声多；表格/代码/JSON 容易变形",
+		"当前方案：抓 tmux 屏幕 + 过滤 + diff + 飞书卡片  已经能跑通 Codex/Claude；不依赖 Codex 内部  本质靠启发式猜内容类型；容易误判表格/代    中高",
+		"                                                    API；能实时更新；兼容多工具                码；TUI 改版会影响过滤规则",
+		"",
+		"我的判断：短期继续沿用当前方案。",
+	}, "\n")
+	want := strings.Join([]string{
+		"| 方向 | 优点 | 缺点 / 风险 | 适合程度 |",
+		"| --- | --- | --- | --- |",
+		"| 直接转发终端原始输出 | 实现简单；最接近本地终端；不容易漏内容 | 手机飞书很难读；TUI 边框、提示、工具日志噪 声多；表格/代码/JSON 容易变形 | 低 |",
+		"| 当前方案：抓 tmux 屏幕 + 过滤 + diff + 飞书卡片 | 已经能跑通 Codex/Claude；不依赖 Codex 内部 API；能实时更新；兼容多工具 | 本质靠启发式猜内容类型；容易误判表格/代 码；TUI 改版会影响过滤规则 | 中高 |",
+		"",
+		"我的判断：短期继续沿用当前方案。",
+	}, "\n")
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexSuppressesIncompletePlainTable(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"• 可以，下面是一张 Markdown 表格：",
+		"",
+		"   项目      状态     备注",
+		"  ━━━━━━━━  ━━━━━━  ━━━━━━━━━━━━━━━━━━━━",
+	}, "\n")
+	want := "• 可以，下面是一张 Markdown 表格："
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexStripsBulletFromMarkdownTableHeader(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"• | 维度 | 优点 | 缺点 / 风险 |",
+		"| --- | --- | --- |",
+		"| 项目定位 | 目标清楚 | 场景强依赖本机环境 |",
+	}, "\n")
+	want := strings.Join([]string{
+		"| 维度 | 优点 | 缺点 / 风险 |",
+		"| --- | --- | --- |",
+		"| 项目定位 | 目标清楚 | 场景强依赖本机环境 |",
+	}, "\n")
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexFiltersExploringToolOutput(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"• 我先只做只读检查。",
+		"• Exploring",
+		"└ Search AGENTS.md in ..",
+		"• 看到这是一个 Go 项目。",
+	}, "\n")
+	want := strings.Join([]string{
+		"• 我先只做只读检查。",
+		"• 看到这是一个 Go 项目。",
+	}, "\n")
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexFiltersMCPStartupWarnings(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"Tip: Type / to open the command popup; Tab autocompletes slash commands.",
+		"⚠ The figma MCP server is not logged in. Run `codex mcp login figma`.",
+		"⚠ MCP startup incomplete (failed: figma)",
+		"• 我先看一下这个仓库的启动方式和本机端口占用。",
+	}, "\n")
+	want := "• 我先看一下这个仓库的启动方式和本机端口占用。"
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexFiltersStartupPanelAndLimitWarnings(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"OpenAI Codex (v0.137.0)",
+		"model:          gpt-5.5 high   /model to change",
+		"directory:      ~/code/fcc",
+		"permissions:    YOLO mode",
+		"Tip: Try the Codex App. Run 'codex app' or visit https://chatgpt.com/codex?app-landing-page=true",
+		"Tip: Use the OpenAI docs MCP for API questions; enable it with codex mcp add openaiDeveloperDocs --url https://developers.openai.com/mcp.",
+		"⚠ Heads up, you have less than 25% of your 5h limit left. Run /status for a breakdown.",
+		"⚠ The figma MCP server is not logged in. Run `codex mcp login figma`.",
+		"⚠ MCP startup incomplete (failed: figma)",
+		"• 我先做个轻量环境检查。",
+	}, "\n")
+	want := "• 我先做个轻量环境检查。"
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexReflowsWrappedTextAfterBulletAnchor(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"• README 和代码显示它是“本机终端 ↔ 飞书”的桥接工具，核心是 tmux 捕获、飞书 WebSocket 收发、菜单栏配置、",
+		"飞书表格卡片行高，以及发送 Enter 的方式。",
+		"",
+		"我看到的几个重点风险：",
+		"1. Codex 普通对齐表格识别有误判空间。",
+		"   internal/bridge/codex_filter.go:120 目标场景覆盖了，但普",
+		"   通“对齐文本”被转成表格或被吞掉的负例还不够。",
+		"优点也很明确：表格卡片、markdown 更新、watchdog 都有工程化处理。下一步如果要动，我会先收敛启动副作",
+		"用，再补 Codex 表格负例测试。",
+	}, "\n")
+	want := strings.Join([]string{
+		"• README 和代码显示它是“本机终端 ↔ 飞书”的桥接工具，核心是 tmux 捕获、飞书 WebSocket 收发、菜单栏配置、飞书表格卡片行高，以及发送 Enter 的方式。",
+		"",
+		"我看到的几个重点风险：",
+		"1. Codex 普通对齐表格识别有误判空间。",
+		"   internal/bridge/codex_filter.go:120 目标场景覆盖了，但普通“对齐文本”被转成表格或被吞掉的负例还不够。",
+		"优点也很明确：表格卡片、markdown 更新、watchdog 都有工程化处理。下一步如果要动，我会先收敛启动副作用，再补 Codex 表格负例测试。",
+	}, "\n")
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexKeepsParagraphAfterMarkdownList(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"- 表格转飞书 table 卡片: internal/bot/bot.go:435",
+		"- 抓 tmux、过滤、diff、发送: internal/bridge/bridge.go:439",
+		"- 表格延迟等待完整输出: internal/bridge/bridge.go:579",
+		"- Codex 噪声过滤和表格识别: internal/bridge/codex_filter.go:38",
+		"",
+		"我认为当前最大风险有三个。",
+		"",
+		"第一，表格识别过度依赖空格对齐。",
+	}, "\n")
+	want := strings.Join([]string{
+		"- 表格转飞书 table 卡片: internal/bot/bot.go:435",
+		"- 抓 tmux、过滤、diff、发送: internal/bridge/bridge.go:439",
+		"- 表格延迟等待完整输出: internal/bridge/bridge.go:579",
+		"- Codex 噪声过滤和表格识别: internal/bridge/codex_filter.go:38",
+		"",
+		"我认为当前最大风险有三个。",
+		"",
+		"第一，表格识别过度依赖空格对齐。",
+	}, "\n")
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexNormalizesShallowListIndent(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"当前工作区状态有 5 个文件存在本地未提交改动：",
+		" - internal/bridge/bridge.go:288: Codex 输入改成 SendLiteral 后延迟 150ms 再发 C-m。",
+		"  - internal/bridge/bridge.go:903: 新增/强化 Codex plain table、换行重排、工具输出过滤。",
+		"    - 这个是真正的嵌套项。",
+		" - internal/bridge/codex_filter.go:1: Codex TUI 过滤规则扩展很多。",
+	}, "\n")
+	want := strings.Join([]string{
+		"当前工作区状态有 5 个文件存在本地未提交改动：",
+		"- internal/bridge/bridge.go:288: Codex 输入改成 SendLiteral 后延迟 150ms 再发 C-m。",
+		"- internal/bridge/bridge.go:903: 新增/强化 Codex plain table、换行重排、工具输出过滤。",
+		"    - 这个是真正的嵌套项。",
+		"- internal/bridge/codex_filter.go:1: Codex TUI 过滤规则扩展很多。",
+	}, "\n")
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexEmphasizesPlainHeadingLines(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"- internal/bridge/bridge_test.go",
+		"- internal/bridge/codex_filter.go",
+		"",
+		"做得好的地方",
+		"核心抽象是合理的。Bridge 通过 Messenger 和 Terminal 抽象隔开飞书和 tmux。",
+		"",
+		"主要风险",
+		"最大风险在启动生命周期。",
+	}, "\n")
+	want := strings.Join([]string{
+		"- internal/bridge/bridge_test.go",
+		"- internal/bridge/codex_filter.go",
+		"",
+		"**做得好的地方**",
+		"核心抽象是合理的。Bridge 通过 Messenger 和 Terminal 抽象隔开飞书和 tmux。",
+		"",
+		"**主要风险**",
+		"最大风险在启动生命周期。",
+	}, "\n")
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
 func TestFilterPaneCodexFiltersAnyPromptEcho(t *testing.T) {
 	b := &Bridge{
 		isCodex:         true,
@@ -492,8 +759,8 @@ func TestSendUserInputToTerminalCodexUsesRealEnter(t *testing.T) {
 	if len(tm.sentLiteral) != 1 || tm.sentLiteral[0] != "给我一个表格" {
 		t.Fatalf("sentLiteral = %v, want [给我一个表格]", tm.sentLiteral)
 	}
-	if len(tm.sentSpecial) != 1 || tm.sentSpecial[0] != "Enter" {
-		t.Fatalf("sentSpecial = %v, want [Enter]", tm.sentSpecial)
+	if len(tm.sentSpecial) != 1 || tm.sentSpecial[0] != "C-m" {
+		t.Fatalf("sentSpecial = %v, want [C-m]", tm.sentSpecial)
 	}
 }
 
@@ -629,6 +896,25 @@ func TestFormatBlockToMarkdownKeepsExistingFence(t *testing.T) {
 	input := "```json\n{}\n```"
 	if got := formatBlockToMarkdown(input); got != input {
 		t.Fatalf("formatBlockToMarkdown() = %q, want %q", got, input)
+	}
+}
+
+func TestFormatBlockToMarkdownDropsStaleCodePrefixBeforeCodexBullet(t *testing.T) {
+	input := strings.Join([]string{
+		"const { isFirstDeploy = false, isDatabaseEmpty = false, explicit",
+		"• 我先只做只读检查：看目录结构、Git 状态、关键配置和入口文件，不改文件、不启动服务。",
+		"• 看到这是一个 Go 项目，当前工作树已经有未提交修改。",
+	}, "\n")
+
+	got := formatBlockToMarkdown(input)
+	if strings.Contains(got, "```") {
+		t.Fatalf("did not expect code fence, got:\n%s", got)
+	}
+	if strings.Contains(got, "isFirstDeploy") {
+		t.Fatalf("expected stale code prefix to be dropped, got:\n%s", got)
+	}
+	if !strings.HasPrefix(got, "• 我先只做只读检查：") {
+		t.Fatalf("expected codex bullet prose to be preserved, got:\n%s", got)
 	}
 }
 
@@ -1183,6 +1469,88 @@ func TestSendBlocksBuffersStreamingTableRows(t *testing.T) {
 	texts := ms.Texts()
 	if len(texts) != 2 || texts[0] != "intro" || texts[1] != "请确认" {
 		t.Errorf("texts = %v, want [intro 请确认]", texts)
+	}
+}
+
+func TestSendBlocksBuffersSingleMarkdownTableHeader(t *testing.T) {
+	ms := &mockMessenger{}
+	b := &Bridge{
+		messenger:     ms,
+		sendTimeout:   10 * time.Second,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	key := receiverKey{id: "user1", kind: "open_id"}
+	state := &receiverState{}
+	b.receivers.Store(key, state)
+
+	ctx := context.Background()
+	b.sendBlocks(ctx, key, "我对后续优先级的判断大概是：\n| 优先级 | 方向 | 原因 |")
+
+	if len(ms.Texts()) != 1 || ms.Texts()[0] != "我对后续优先级的判断大概是：" {
+		t.Fatalf("texts after header = %v, want intro only", ms.Texts())
+	}
+	if len(ms.Tables()) != 0 {
+		t.Fatalf("table header should be buffered, got tables: %v", ms.Tables())
+	}
+	if strings.Join(state.pendingTable, "\n") != "| 优先级 | 方向 | 原因 |" {
+		t.Fatalf("pendingTable = %v", state.pendingTable)
+	}
+
+	state.pendingTableSince = time.Now().Add(-6 * time.Second)
+	if b.flushPendingTableIfReady(ctx, key, state, 5*time.Second) {
+		t.Fatal("incomplete table header should not flush on idle")
+	}
+
+	b.sendBlocks(ctx, key, "| --- | --- | --- |\n| P0 | 收敛启动 | 最容易造成诡异故障 |")
+
+	if len(ms.Tables()) != 0 {
+		t.Fatalf("completed table should wait for idle flush, got %v", ms.Tables())
+	}
+	state.pendingTableSince = time.Now().Add(-6 * time.Second)
+	if !b.flushPendingTableIfReady(ctx, key, state, 5*time.Second) {
+		t.Fatal("expected completed table to flush on idle")
+	}
+
+	tables := ms.Tables()
+	if len(tables) != 1 {
+		t.Fatalf("expected one completed table, got %d: %v", len(tables), tables)
+	}
+	wantTable := "| 优先级 | 方向 | 原因 |\n| --- | --- | --- |\n| P0 | 收敛启动 | 最容易造成诡异故障 |"
+	if tables[0] != wantTable {
+		t.Fatalf("table =\n%q\nwant:\n%q", tables[0], wantTable)
+	}
+}
+
+func TestCaptureAndSendBuffersCodexBulletMarkdownTableHeader(t *testing.T) {
+	tm := &mockTerminal{
+		captures: []string{
+			"base\n• | 维度 | 优点 | 缺点 / 风险 |",
+		},
+	}
+	ms := &mockMessenger{}
+	b := &Bridge{
+		messenger:     ms,
+		term:          tm,
+		sendTimeout:   10 * time.Second,
+		historyLines:  2000,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+		isCodex:       true,
+	}
+	key := receiverKey{id: "user1", kind: "open_id"}
+	state := &receiverState{lastPane: "base", ready: true}
+	b.receivers.Store(key, state)
+
+	b.captureAndSend(context.Background())
+	time.Sleep(50 * time.Millisecond)
+
+	if len(ms.Texts()) != 0 {
+		t.Fatalf("bullet table header should not be sent as text, got %v", ms.Texts())
+	}
+	if len(ms.Tables()) != 0 {
+		t.Fatalf("incomplete table should not be sent yet, got %v", ms.Tables())
+	}
+	if strings.Join(state.pendingTable, "\n") != "| 维度 | 优点 | 缺点 / 风险 |" {
+		t.Fatalf("pendingTable = %v", state.pendingTable)
 	}
 }
 

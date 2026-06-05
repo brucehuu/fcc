@@ -292,7 +292,8 @@ func (b *Bridge) sendUserInputToTerminal(term Terminal, text string) error {
 	if err := term.SendLiteral(text); err != nil {
 		return err
 	}
-	return term.SendSpecialKey("Enter")
+	time.Sleep(150 * time.Millisecond)
+	return term.SendSpecialKey("C-m")
 }
 
 // Start 启动后台 goroutine（飞书连接 + output capture），不 attach tmux
@@ -491,7 +492,10 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 	return hasDiff
 }
 
-const maxMarkdownLen = 3000 // interactive 卡片 JSON 有长度限制，内容留余量
+const (
+	maxMarkdownLen    = 3000 // interactive 卡片 JSON 有长度限制，内容留余量
+	markdownCardBreak = "\f"
+)
 
 // sendBlocks 把 diff 内容格式化为 markdown 并追加到 receiver 的累积 buffer 中，
 // 然后更新已有消息或发送新消息。所有内容最终只体现在一条不断追加的消息里。
@@ -533,6 +537,9 @@ func (b *Bridge) sendBlocksWithTables(ctx context.Context, key receiverKey, stat
 		if len(state.pendingTable) == 0 {
 			return
 		}
+		if !isMarkdownTable(strings.Join(state.pendingTable, "\n")) {
+			return
+		}
 		table := strings.Join(state.pendingTable, "\n")
 		state.pendingTable = nil
 		state.pendingTableSince = time.Time{}
@@ -565,11 +572,7 @@ func (b *Bridge) sendBlocksWithTables(ctx context.Context, key receiverKey, stat
 			continue
 		}
 
-		if len(state.pendingTable) > 0 {
-			appendPendingTable(block)
-			continue
-		}
-		textBlocks = append(textBlocks, block)
+		appendPendingTable(block)
 	}
 
 	flushText()
@@ -583,6 +586,9 @@ func (b *Bridge) flushPendingTableIfReady(ctx context.Context, key receiverKey, 
 	}
 
 	table := strings.Join(state.pendingTable, "\n")
+	if !isMarkdownTable(table) {
+		return false
+	}
 	state.pendingTable = nil
 	state.pendingTableSince = time.Time{}
 	b.sendInteractiveTableOrMarkdown(ctx, key, state, table)
@@ -636,22 +642,29 @@ func (b *Bridge) sendMarkdownBlocks(ctx context.Context, key receiverKey, state 
 		}
 		newContent.WriteString(md)
 	}
+	flushMarkdown := func() {
+		incoming := compactMarkdownSpacing(newContent.String())
+		if incoming == "" {
+			newContent.Reset()
+			return
+		}
+		b.sendMarkdownContent(ctx, key, state, incoming)
+		newContent.Reset()
+	}
 
 	for _, block := range blocks {
 		if block == "" {
 			continue
 		}
+		if block == markdownCardBreak {
+			flushMarkdown()
+			state.messageID = ""
+			state.contentBuf.Reset()
+			continue
+		}
 		b.appendMarkdownBlock(ctx, key, state, block, appendMarkdown)
 	}
-	if newContent.Len() == 0 {
-		return
-	}
-	incoming := compactMarkdownSpacing(newContent.String())
-	if incoming == "" {
-		return
-	}
-
-	b.sendMarkdownContent(ctx, key, state, incoming)
+	flushMarkdown()
 }
 
 func (b *Bridge) appendMarkdownBlock(ctx context.Context, key receiverKey, state *receiverState, block string, appendMarkdown func(string)) {
@@ -798,8 +811,20 @@ func splitDiffIntoBlocks(diff string) []string {
 			tableBuf = nil
 		}
 	}
+	appendCardBreak := func() {
+		if len(blocks) == 0 || blocks[len(blocks)-1] == markdownCardBreak {
+			return
+		}
+		blocks = append(blocks, markdownCardBreak)
+	}
 
 	for _, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			flushText()
+			flushTable()
+			appendCardBreak()
+			continue
+		}
 		if isMarkdownTableLine(line) {
 			flushText()
 			tableBuf = append(tableBuf, line)
@@ -810,6 +835,9 @@ func splitDiffIntoBlocks(diff string) []string {
 	}
 	flushText()
 	flushTable()
+	for len(blocks) > 0 && blocks[len(blocks)-1] == markdownCardBreak {
+		blocks = blocks[:len(blocks)-1]
+	}
 	return blocks
 }
 
@@ -850,6 +878,18 @@ func isMarkdownTableLine(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	// Markdown 表格行以 | 开头或结尾
 	return strings.HasPrefix(trimmed, "|") && strings.HasSuffix(trimmed, "|")
+}
+
+func codexBulletMarkdownTableLine(line string) (string, bool) {
+	trimmed := normalizeCodexLine(line)
+	if !strings.HasPrefix(trimmed, "• ") {
+		return "", false
+	}
+	candidate := strings.TrimSpace(strings.TrimPrefix(trimmed, "• "))
+	if !isMarkdownTableLine(candidate) {
+		return "", false
+	}
+	return candidate, true
 }
 
 func isMarkdownTable(block string) bool {
@@ -926,6 +966,12 @@ func (b *Bridge) filterPane(pane string) string {
 		rawLine := strings.TrimRight(lines[i], " \t\r")
 		line := strings.TrimSpace(rawLine)
 		if line == "" {
+			if b.isCodex {
+				flushCodexPlainTable()
+				if len(result) > 0 && result[len(result)-1] != "" {
+					result = append(result, "")
+				}
+			}
 			skipClaudeToolOutput = false
 			continue
 		}
@@ -947,14 +993,32 @@ func (b *Bridge) filterPane(pane string) string {
 			continue
 		}
 
-		if b.isCodex && isCodexPlainTableLine(line) {
+		if b.isCodex && isCodexPlainTableLine(rawLine) {
 			if inTable {
 				result = append(result, flushTable(tableBuf)...)
 				tableBuf = nil
 				inTable = false
 			}
-			codexPlainTableBuf = append(codexPlainTableBuf, line)
+			codexPlainTableBuf = append(codexPlainTableBuf, rawLine)
 			continue
+		}
+
+		if b.isCodex && len(codexPlainTableBuf) > 0 && isCodexPlainTableContinuationLine(rawLine) {
+			codexPlainTableBuf = append(codexPlainTableBuf, rawLine)
+			continue
+		}
+
+		if b.isCodex {
+			if tableLine, ok := codexBulletMarkdownTableLine(rawLine); ok {
+				if inTable {
+					result = append(result, flushTable(tableBuf)...)
+					tableBuf = nil
+					inTable = false
+				}
+				flushCodexPlainTable()
+				result = append(result, tableLine)
+				continue
+			}
 		}
 
 		if b.isClaude && skipClaudeToolOutput {
@@ -1029,6 +1093,14 @@ func (b *Bridge) filterPane(pane string) string {
 	flushCodexPlainTable()
 	if inTable && len(tableBuf) > 0 {
 		result = append(result, flushTable(tableBuf)...)
+	}
+	if b.isCodex {
+		result = reflowCodexWrappedLines(result)
+		result = normalizeCodexShallowMarkdownListIndent(result)
+		result = emphasizeCodexHeadingLines(result)
+	}
+	for len(result) > 0 && result[len(result)-1] == "" {
+		result = result[:len(result)-1]
 	}
 	return strings.Join(result, "\n")
 }
@@ -1108,6 +1180,238 @@ func isHorizontalBorder(line string) bool {
 	return true
 }
 
+func reflowCodexWrappedLines(lines []string) []string {
+	var result []string
+	inCodexAnswer := false
+
+	for _, raw := range lines {
+		line := strings.TrimRight(raw, " \t")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			result = append(result, line)
+			continue
+		}
+
+		if isCodexReflowBulletAnchor(trimmed) {
+			inCodexAnswer = true
+			result = append(result, line)
+			continue
+		}
+
+		if inCodexAnswer && len(result) > 0 && shouldMergeCodexWrappedLine(result[len(result)-1], line) {
+			result[len(result)-1] = joinCodexWrappedLine(result[len(result)-1], line)
+			continue
+		}
+
+		if shouldInsertBlankAfterMarkdownList(result, line) {
+			result = append(result, "")
+		}
+		result = append(result, line)
+	}
+	return result
+}
+
+func normalizeCodexShallowMarkdownListIndent(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		out[i] = normalizeCodexShallowMarkdownListLine(line)
+	}
+	return out
+}
+
+func normalizeCodexShallowMarkdownListLine(line string) string {
+	indent := 0
+	for indent < len(line) && line[indent] == ' ' {
+		indent++
+	}
+	if indent == 0 || indent > 2 || indent+1 >= len(line) {
+		return line
+	}
+	marker := line[indent]
+	if (marker == '-' || marker == '*' || marker == '+') && line[indent+1] == ' ' {
+		return line[indent:]
+	}
+	return line
+}
+
+func emphasizeCodexHeadingLines(lines []string) []string {
+	out := make([]string, len(lines))
+	for i, line := range lines {
+		if isCodexHeadingLine(line, nextNonBlankLine(lines, i+1)) {
+			out[i] = "**" + strings.TrimSpace(line) + "**"
+			continue
+		}
+		out[i] = line
+	}
+	return out
+}
+
+func nextNonBlankLine(lines []string, start int) string {
+	for i := start; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != "" {
+			return lines[i]
+		}
+	}
+	return ""
+}
+
+func isCodexHeadingLine(line, next string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" || strings.HasPrefix(trimmed, "**") || strings.HasSuffix(trimmed, "**") {
+		return false
+	}
+	if next == "" {
+		return false
+	}
+	if isMarkdownTableLine(trimmed) || isMarkdownListItemStart(trimmed) || isMarkdownListItemStart(strings.TrimSpace(next)) {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "```") || strings.HasPrefix(strings.TrimSpace(next), "```") {
+		return false
+	}
+	if strings.ContainsAny(trimmed, "/\\`|{}[]()") || strings.Contains(trimmed, ".go") {
+		return false
+	}
+	if strings.ContainsAny(trimmed, "，。；：,.!！?？") {
+		return false
+	}
+	runeCount := utf8.RuneCountInString(trimmed)
+	if runeCount < 2 || runeCount > 16 {
+		return false
+	}
+	return containsCJK(trimmed)
+}
+
+func shouldInsertBlankAfterMarkdownList(result []string, next string) bool {
+	if len(result) == 0 {
+		return false
+	}
+	nextTrimmed := strings.TrimSpace(next)
+	if nextTrimmed == "" || isMarkdownListItemStart(nextTrimmed) || isMarkdownTableLine(nextTrimmed) {
+		return false
+	}
+	if strings.HasPrefix(next, " ") || strings.HasPrefix(next, "\t") {
+		return false
+	}
+	for i := len(result) - 1; i >= 0; i-- {
+		prev := strings.TrimSpace(result[i])
+		if prev == "" {
+			return false
+		}
+		return isMarkdownListItemStart(prev)
+	}
+	return false
+}
+
+func shouldMergeCodexWrappedLine(prev, next string) bool {
+	prev = strings.TrimRight(prev, " \t")
+	nextTrimmed := strings.TrimSpace(next)
+	prevTrimmed := strings.TrimSpace(prev)
+	if prevTrimmed == "" || nextTrimmed == "" {
+		return false
+	}
+	if isMarkdownTableLine(prevTrimmed) || isMarkdownTableLine(nextTrimmed) {
+		return false
+	}
+	if isCodexReflowBulletAnchor(nextTrimmed) || isMarkdownListItemStart(nextTrimmed) {
+		return false
+	}
+	if strings.HasPrefix(nextTrimmed, "```") || strings.HasPrefix(prevTrimmed, "```") {
+		return false
+	}
+	if isCodexReflowCodeLikeLine(prevTrimmed) || isCodexReflowCodeLikeLine(nextTrimmed) {
+		return false
+	}
+	if endsCodexReflowParagraph(prevTrimmed) {
+		return false
+	}
+	return containsCJK(prevTrimmed) || containsCJK(nextTrimmed)
+}
+
+func joinCodexWrappedLine(prev, next string) string {
+	prev = strings.TrimRight(prev, " \t")
+	next = strings.TrimSpace(next)
+	return prev + codexWrappedLineSeparator(prev, next) + next
+}
+
+func codexWrappedLineSeparator(prev, next string) string {
+	last, _ := utf8.DecodeLastRuneInString(prev)
+	first, _ := utf8.DecodeRuneInString(next)
+	if last == utf8.RuneError || first == utf8.RuneError {
+		return " "
+	}
+	if isNoSpaceBeforeRune(first) || isNoSpaceAfterRune(last) {
+		return ""
+	}
+	if isCJKRune(last) && isCJKRune(first) {
+		return ""
+	}
+	return " "
+}
+
+func isCodexReflowBulletAnchor(line string) bool {
+	return strings.HasPrefix(normalizeCodexLine(line), "• ")
+}
+
+func isMarkdownListItemStart(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return false
+	}
+	if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") || strings.HasPrefix(line, "+ ") {
+		return true
+	}
+	i := 0
+	for i < len(line) && line[i] >= '0' && line[i] <= '9' {
+		i++
+	}
+	return i > 0 && i+1 < len(line) && (line[i] == '.' || line[i] == ')') && line[i+1] == ' '
+}
+
+func endsCodexReflowParagraph(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(line)
+	return strings.ContainsRune("。！？；：.!?;:", r)
+}
+
+func isCodexReflowCodeLikeLine(line string) bool {
+	line = strings.TrimSpace(normalizeCodeStartLine(line))
+	if line == "" {
+		return false
+	}
+	if strings.HasPrefix(line, "{") || strings.HasPrefix(line, "}") ||
+		strings.HasPrefix(line, "[") || strings.HasPrefix(line, "]") ||
+		strings.HasPrefix(line, `"`) ||
+		strings.HasPrefix(line, "//") ||
+		strings.HasPrefix(line, "package ") ||
+		strings.HasPrefix(line, "import ") ||
+		strings.HasPrefix(line, "func ") ||
+		strings.HasPrefix(line, "function ") ||
+		strings.HasPrefix(line, "async function ") ||
+		strings.HasPrefix(line, "const ") ||
+		strings.HasPrefix(line, "let ") ||
+		strings.HasPrefix(line, "var ") ||
+		strings.HasPrefix(line, "class ") {
+		return true
+	}
+	return strings.Contains(line, ":=") || strings.HasSuffix(line, "{") || strings.HasSuffix(line, ";")
+}
+
+func isCJKRune(r rune) bool {
+	return (r >= '\u4e00' && r <= '\u9fff') || (r >= '\u3400' && r <= '\u4dbf')
+}
+
+func isNoSpaceBeforeRune(r rune) bool {
+	return strings.ContainsRune("，。！？；：、,.!?;:)]}）】》”’", r)
+}
+
+func isNoSpaceAfterRune(r rune) bool {
+	return strings.ContainsRune("([{（【《“‘/，、", r)
+}
+
 func convertTableLine(line string) string {
 	line = strings.TrimSpace(line)
 	var parts []string
@@ -1170,6 +1474,17 @@ func formatBlockToMarkdown(block string) string {
 	if block == "" || strings.Contains(block, "```") {
 		return block
 	}
+	if prefix, rest, ok := splitBeforeCodexAssistantBullet(block); ok {
+		if isOnlyCodexStaleCodePrefix(prefix) {
+			return formatBlockToMarkdown(rest)
+		}
+		formattedRest := formatBlockToMarkdown(rest)
+		prefix = strings.TrimSpace(prefix)
+		if prefix == "" {
+			return formattedRest
+		}
+		return prefix + "\n\n" + formattedRest
+	}
 	if fenced := fenceJSONLikeBlock(block); fenced != block {
 		return fenced
 	}
@@ -1177,6 +1492,33 @@ func formatBlockToMarkdown(block string) string {
 		return fenced
 	}
 	return fenceJavaScriptLikeBlock(block)
+}
+
+func splitBeforeCodexAssistantBullet(block string) (string, string, bool) {
+	lines := strings.Split(block, "\n")
+	for i := 1; i < len(lines); i++ {
+		if isCodexReflowBulletAnchor(lines[i]) {
+			return strings.Join(lines[:i], "\n"), strings.Join(lines[i:], "\n"), true
+		}
+	}
+	return "", "", false
+}
+
+func isOnlyCodexStaleCodePrefix(prefix string) bool {
+	lines := strings.Split(strings.TrimSpace(prefix), "\n")
+	if len(lines) == 0 || len(lines) > 3 {
+		return false
+	}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if !isCodexReflowCodeLikeLine(line) {
+			return false
+		}
+	}
+	return true
 }
 
 func fenceJSONLikeBlock(block string) string {
@@ -1231,6 +1573,14 @@ func splitStreamingJSONStart(block string) (string, []string, bool) {
 
 func appendPendingCodeLines(state *receiverState, lines []string) (string, string) {
 	for i, line := range lines {
+		if isCodexReflowBulletAnchor(line) && isOnlyCodexStaleCodePrefix(strings.Join(state.pendingCode, "\n")) {
+			state.pendingCode = nil
+			state.pendingCodeLang = ""
+			state.pendingCodeSince = time.Time{}
+			remainder := strings.TrimSpace(strings.Join(lines[i:], "\n"))
+			return "", remainder
+		}
+
 		if state.pendingCodeLang == "javascript" &&
 			isJavaScriptCodeComplete(state.pendingCode) &&
 			!isJavaScriptCodeLine(line) &&

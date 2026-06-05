@@ -483,7 +483,7 @@ func buildTableCard(markdownTable string) (map[string]interface{}, error) {
 			"data_type":        "lark_md",
 			"horizontal_align": "left",
 			"vertical_align":   "top",
-			"width":            "auto",
+			"width":            tableColumnWidth(i, colCount),
 		}
 	}
 
@@ -517,28 +517,45 @@ func buildTableCard(markdownTable string) (map[string]interface{}, error) {
 	}
 
 	return map[string]interface{}{
+		"schema": "2.0",
 		"config": map[string]interface{}{
 			"wide_screen_mode": true,
 		},
-		"elements": []map[string]interface{}{
-			{
-				"tag":                 "table",
-				"page_size":           min(max(len(rows), 1), 10),
-				"row_height":          "high",
-				"freeze_first_column": false,
-				"header_style": map[string]interface{}{
-					"text_align":       "left",
-					"text_size":        "normal",
-					"background_style": "grey",
-					"text_color":       "default",
-					"bold":             true,
-					"lines":            1,
+		"body": map[string]interface{}{
+			"elements": []map[string]interface{}{
+				{
+					"tag":                 "table",
+					"page_size":           min(max(len(rows), 1), 10),
+					"row_height":          "auto",
+					"row_max_height":      "360px",
+					"freeze_first_column": false,
+					"header_style": map[string]interface{}{
+						"text_align":       "left",
+						"text_size":        "normal",
+						"background_style": "grey",
+						"text_color":       "default",
+						"bold":             true,
+						"lines":            2,
+					},
+					"columns": columns,
+					"rows":    rows,
 				},
-				"columns": columns,
-				"rows":    rows,
 			},
 		},
 	}, nil
+}
+
+func tableColumnWidth(index, colCount int) string {
+	if colCount <= 0 {
+		return "100%"
+	}
+	base := 100 / colCount
+	remainder := 100 % colCount
+	width := base
+	if index < remainder {
+		width++
+	}
+	return fmt.Sprintf("%d%%", width)
 }
 
 func parseMarkdownTableCells(line string) []string {

@@ -98,7 +98,14 @@ func TestBuildTableCard(t *testing.T) {
 			if err != nil {
 				return
 			}
-			elements, ok := card["elements"].([]map[string]interface{})
+			if card["schema"] != "2.0" {
+				t.Fatalf("schema = %v, want 2.0", card["schema"])
+			}
+			body, ok := card["body"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("body not found or wrong type: %v", card["body"])
+			}
+			elements, ok := body["elements"].([]map[string]interface{})
 			if !ok {
 				t.Fatal("elements not found or wrong type")
 			}
@@ -109,15 +116,50 @@ func TestBuildTableCard(t *testing.T) {
 			if table["tag"] != "table" {
 				t.Fatalf("table tag = %v, want table", table["tag"])
 			}
+			if table["row_height"] != "auto" {
+				t.Fatalf("row_height = %v, want auto", table["row_height"])
+			}
+			if table["row_max_height"] != "360px" {
+				t.Fatalf("row_max_height = %v, want 360px", table["row_max_height"])
+			}
+			headerStyle, ok := table["header_style"].(map[string]interface{})
+			if !ok {
+				t.Fatalf("header_style = %v", table["header_style"])
+			}
+			if headerStyle["lines"] != 2 {
+				t.Fatalf("header lines = %v, want 2", headerStyle["lines"])
+			}
 			columns, ok := table["columns"].([]map[string]interface{})
 			if !ok || len(columns) != len(parseMarkdownTableCells(strings.Split(tt.input, "\n")[0])) {
 				t.Fatalf("columns = %v", table["columns"])
+			}
+			for _, column := range columns {
+				if column["width"] == "auto" {
+					t.Fatalf("column width should use percentage, got auto: %v", column)
+				}
 			}
 			rows, ok := table["rows"].([]map[string]interface{})
 			if !ok || len(rows) != tt.wantRows {
 				t.Errorf("rows = %v, want %d rows", table["rows"], tt.wantRows)
 			}
 		})
+	}
+}
+
+func TestBuildTableCardUsesPercentageColumnWidths(t *testing.T) {
+	card, err := buildTableCard("| A | B | C | D |\n| --- | --- | --- | --- |\n| 1 | 2 | 3 | 4 |")
+	if err != nil {
+		t.Fatalf("buildTableCard() error = %v", err)
+	}
+	body := card["body"].(map[string]interface{})
+	elements := body["elements"].([]map[string]interface{})
+	table := elements[0]
+	columns := table["columns"].([]map[string]interface{})
+	want := []string{"25%", "25%", "25%", "25%"}
+	for i, column := range columns {
+		if column["width"] != want[i] {
+			t.Fatalf("column %d width = %v, want %s", i, column["width"], want[i])
+		}
 	}
 }
 
