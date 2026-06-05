@@ -42,3 +42,77 @@ func TestCommandFromTool(t *testing.T) {
 		}
 	}
 }
+
+func TestAIToolConfigUpdates(t *testing.T) {
+	tests := []struct {
+		name       string
+		tool       string
+		command    string
+		bypass     bool
+		wantCmd    string
+		wantBypass string
+		wantErr    bool
+	}{
+		{
+			name:       "codex with bypass",
+			tool:       "codex",
+			bypass:     true,
+			wantCmd:    "codex",
+			wantBypass: "true",
+		},
+		{
+			name:       "opencode disables bypass",
+			tool:       "opencode",
+			bypass:     true,
+			wantCmd:    "opencode",
+			wantBypass: "false",
+		},
+		{
+			name:       "custom command trims and disables bypass",
+			tool:       "custom",
+			command:    " bash -il ",
+			bypass:     true,
+			wantCmd:    "bash -il",
+			wantBypass: "false",
+		},
+		{
+			name:    "empty custom command",
+			tool:    "custom",
+			command: "  ",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd, bypass, updates, err := aiToolConfigUpdates(tt.tool, tt.command, tt.bypass)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("aiToolConfigUpdates() error = %v", err)
+			}
+			if cmd != tt.wantCmd {
+				t.Fatalf("command = %q, want %q", cmd, tt.wantCmd)
+			}
+			if boolString(bypass) != tt.wantBypass {
+				t.Fatalf("bypass = %v, want %s", bypass, tt.wantBypass)
+			}
+			if updates["COMMAND"] != tt.wantCmd {
+				t.Fatalf("updates COMMAND = %q, want %q", updates["COMMAND"], tt.wantCmd)
+			}
+			if updates["BYPASS_PERMISSIONS"] != tt.wantBypass {
+				t.Fatalf("updates BYPASS_PERMISSIONS = %q, want %q", updates["BYPASS_PERMISSIONS"], tt.wantBypass)
+			}
+			if _, ok := updates["LARK_APP_ID"]; ok {
+				t.Fatal("AI tool updates should not include LARK_APP_ID")
+			}
+			if _, ok := updates["LARK_APP_SECRET"]; ok {
+				t.Fatal("AI tool updates should not include LARK_APP_SECRET")
+			}
+		})
+	}
+}

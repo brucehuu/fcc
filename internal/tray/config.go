@@ -162,6 +162,38 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 		return map[string]interface{}{"success": true}
 	})
 
+	w.Bind("readClipboard", func() string {
+		out, err := exec.Command("pbpaste").Output()
+		if err != nil {
+			return ""
+		}
+		return string(out)
+	})
+
+	w.Bind("saveAiToolConfig", func(tool, command string, bypass bool) map[string]interface{} {
+		oldCfg, _ := config.Load(".env")
+		var oldCommand string
+		var oldBypass bool
+		if oldCfg != nil {
+			oldCommand = oldCfg.Command
+			oldBypass = oldCfg.BypassPermissions
+		}
+
+		command, bypass, updates, err := aiToolConfigUpdates(tool, command, bypass)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
+		if err := config.UpdateEnvVars(".env", updates); err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
+		}
+
+		tmuxChanged := oldCommand != command || oldBypass != bypass
+		if !firstRun && tmuxChanged {
+			signalFCC(syscall.SIGUSR1)
+		}
+		return map[string]interface{}{"success": true, "tmuxChanged": tmuxChanged}
+	})
+
 	w.Bind("saveConfig", func(tool, command string, bypass bool, appID, appSecret, targetName string) map[string]interface{} {
 		// Read the old config to decide whether tmux needs to be restarted.
 		oldCfg, _ := config.Load(".env")
@@ -171,9 +203,11 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 			oldCommand = oldCfg.Command
 			oldBypass = oldCfg.BypassPermissions
 		}
-		command = commandFromTool(tool, command)
-		if command == "" {
-			return map[string]interface{}{"success": false, "error": "Command is required"}
+		var updates map[string]string
+		var err error
+		command, bypass, updates, err = aiToolConfigUpdates(tool, command, bypass)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": err.Error()}
 		}
 		if firstRun {
 			if appID == "" || appSecret == "" {
@@ -181,10 +215,6 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 			}
 		}
 
-		updates := map[string]string{
-			"COMMAND":            command,
-			"BYPASS_PERMISSIONS": boolString(bypass),
-		}
 		if appID != "" {
 			updates["LARK_APP_ID"] = appID
 		}
@@ -207,13 +237,7 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 		}
 
 		if tmuxChanged {
-			data, err := os.ReadFile("/tmp/fcc.pid")
-			if err == nil {
-				var pid int
-				if _, err := fmt.Sscanf(string(data), "%d", &pid); err == nil {
-					_ = syscall.Kill(pid, syscall.SIGUSR1)
-				}
-			}
+			signalFCC(syscall.SIGUSR1)
 		}
 
 		return map[string]interface{}{"success": true, "tmuxChanged": tmuxChanged}
@@ -291,6 +315,31 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 	})
 
 	w.Run()
+}
+
+func aiToolConfigUpdates(tool, command string, bypass bool) (string, bool, map[string]string, error) {
+	command = commandFromTool(tool, command)
+	if command == "" {
+		return "", false, nil, fmt.Errorf("Command is required")
+	}
+	if tool == "opencode" || tool == "custom" {
+		bypass = false
+	}
+	return command, bypass, map[string]string{
+		"COMMAND":            command,
+		"BYPASS_PERMISSIONS": boolString(bypass),
+	}, nil
+}
+
+func signalFCC(sig syscall.Signal) {
+	data, err := os.ReadFile("/tmp/fcc.pid")
+	if err != nil {
+		return
+	}
+	var pid int
+	if _, err := fmt.Sscanf(string(data), "%d", &pid); err == nil {
+		_ = syscall.Kill(pid, sig)
+	}
 }
 
 func configHTML() string {
@@ -520,12 +569,42 @@ func configHTML() string {
   <script>
     const $ = id => document.getElementById(id);
 
-    document.addEventListener('keydown', function(e) {
-      if (e.metaKey && e.key === 'w') {
+    document.addEventListener('keydown', async function(e) {
+      const key = (e.key || '').toLowerCase();
+      if ((e.metaKey || e.ctrlKey) && key === 'v') {
+        const target = document.activeElement;
+        if (isPasteTarget(target)) {
+          e.preventDefault();
+          const text = await window.readClipboard();
+          insertTextAtCursor(target, text || '');
+        }
+        return;
+      }
+      if (e.metaKey && key === 'w') {
         e.preventDefault();
         window.closeWindow();
       }
     });
+
+    function isPasteTarget(el) {
+      if (!el || el.disabled || el.readOnly) return false;
+      const tag = (el.tagName || '').toUpperCase();
+      if (tag === 'TEXTAREA') return true;
+      if (tag !== 'INPUT') return false;
+      return ['text', 'password', 'search', 'url', 'email', 'tel', ''].includes((el.type || '').toLowerCase());
+    }
+
+    function insertTextAtCursor(el, text) {
+      const start = el.selectionStart ?? el.value.length;
+      const end = el.selectionEnd ?? el.value.length;
+      el.value = el.value.slice(0, start) + text + el.value.slice(end);
+      const pos = start + text.length;
+      if (typeof el.setSelectionRange === 'function') {
+        el.setSelectionRange(pos, pos);
+      }
+      el.dispatchEvent(new Event('input', {bubbles: true}));
+      el.dispatchEvent(new Event('change', {bubbles: true}));
+    }
 
     function setStatus(text, isError) {
       const activeTab = document.querySelector('.tab-content.active');
@@ -719,7 +798,7 @@ func configHTML() string {
         const tool = $('command').value;
         const cmd = tool === 'custom' ? $('customCommand').value.trim() : tool;
         const bypass = (tool === 'opencode' || tool === 'custom') ? false : $('bypass').checked;
-        const res = await window.saveConfig(tool, cmd, bypass, '', '', '');
+        const res = await window.saveAiToolConfig(tool, cmd, bypass);
         if (res.success) {
           let msg = 'Saved.';
           if (res.tmuxChanged) msg += ' Tmux restarted automatically.';
@@ -828,7 +907,7 @@ func getAllChats(token string) ([]string, error) {
 		var result struct {
 			Code int `json:"code"`
 			Data struct {
-				Items     []struct {
+				Items []struct {
 					ChatID string `json:"chat_id"`
 				} `json:"items"`
 				HasMore   bool   `json:"has_more"`
@@ -873,7 +952,7 @@ func getChatMembers(token, chatID string) ([]memberInfo, error) {
 		var result struct {
 			Code int `json:"code"`
 			Data struct {
-				Items     []struct {
+				Items []struct {
 					MemberID string `json:"member_id"`
 					Name     string `json:"name"`
 				} `json:"items"`
