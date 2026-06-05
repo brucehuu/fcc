@@ -3,7 +3,10 @@
 package tray
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -208,6 +211,93 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 		return map[string]interface{}{"success": true, "tmuxChanged": tmuxChanged}
 	})
 
+	w.Bind("testMessage", func(appID, appSecret, targetName string) map[string]interface{} {
+		if appID == "" || appSecret == "" {
+			return map[string]interface{}{"success": false, "error": "App ID and App Secret are required"}
+		}
+
+		token, err := getTenantAccessToken(appID, appSecret)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": "get token: " + err.Error()}
+		}
+
+		chatIDs, err := getAllChats(token)
+		if err != nil {
+			return map[string]interface{}{"success": false, "error": "get chats: " + err.Error()}
+		}
+		if len(chatIDs) == 0 {
+			return map[string]interface{}{"success": false, "error": "no chats found"}
+		}
+
+		// Collect all unique members across all chats.
+		memberMap := make(map[string]string) // open_id -> name
+		for _, chatID := range chatIDs {
+			members, err := getChatMembers(token, chatID)
+			if err != nil {
+				continue
+			}
+			for _, m := range members {
+				memberMap[m.OpenID] = m.Name
+			}
+		}
+		if len(memberMap) == 0 {
+			return map[string]interface{}{"success": false, "error": "no members found in any chat"}
+		}
+
+		// If a target name is provided, find the matching member.
+		targetName = strings.TrimSpace(targetName)
+		if targetName != "" {
+			targetLower := strings.ToLower(targetName)
+			var matchedOpenID, matchedName string
+			matchCount := 0
+			for openID, name := range memberMap {
+				if strings.Contains(strings.ToLower(name), targetLower) {
+					matchedOpenID = openID
+					matchedName = name
+					matchCount++
+				}
+			}
+			if matchCount == 0 {
+				return map[string]interface{}{"success": false, "error": "no member named '" + targetName + "' found"}
+			}
+			if matchCount > 1 {
+				return map[string]interface{}{"success": false, "error": fmt.Sprintf("found %d members matching '%s', please use exact name", matchCount, targetName)}
+			}
+			if err := sendTestMessage(token, matchedOpenID); err != nil {
+				return map[string]interface{}{"success": false, "error": "send to " + matchedName + ": " + err.Error()}
+			}
+			return map[string]interface{}{"success": true, "message": "Message sent to " + matchedName}
+		}
+
+		// No target name: send to all unique members.
+		var successCount, failCount int
+		var firstError string
+		for openID, name := range memberMap {
+			if err := sendTestMessage(token, openID); err != nil {
+				failCount++
+				if firstError == "" {
+					firstError = fmt.Sprintf("send to %s: %v", name, err)
+				}
+			} else {
+				successCount++
+			}
+		}
+
+		msg := fmt.Sprintf("Sent to %d member(s)", successCount)
+		if failCount > 0 {
+			msg += fmt.Sprintf(", %d failed", failCount)
+		}
+
+		result := map[string]interface{}{
+			"success": successCount > 0,
+			"message": msg,
+		}
+		if successCount == 0 && firstError != "" {
+			result["error"] = firstError
+		}
+		return result
+	})
+
 	w.Run()
 }
 
@@ -352,6 +442,12 @@ func configHTML() string {
       </button>
     </div>
     <div class="hint">Leave blank to keep current value.</div>
+    <div class="field" style="margin-top:10px; margin-bottom:0;">
+      <label for="targetName">Feishu Account Name</label>
+      <input type="text" id="targetName" placeholder="Enter name to send test message to">
+    </div>
+    <button id="testBtn" onclick="doTestMessage()" style="background:#34c759; margin-top:10px;">Test Message</button>
+    <div id="testStatus" style="margin-top:6px; font-size:12px; min-height:18px;"></div>
   </div>
 
   <div class="field">
@@ -576,11 +672,193 @@ func configHTML() string {
       btn.disabled = false;
     }
 
+    async function doTestMessage() {
+      const btn = $('testBtn');
+      const testStatusEl = $('testStatus');
+      btn.disabled = true;
+      testStatusEl.textContent = 'Sending...';
+      testStatusEl.className = '';
+      try {
+        const appID = $('appID').value.trim();
+        const appSecret = $('appSecret').value.trim();
+        if (!appID || !appSecret) {
+          testStatusEl.textContent = 'Please enter App ID and App Secret first';
+          testStatusEl.className = 'error';
+          return;
+        }
+        const targetName = $('targetName').value.trim();
+        const res = await window.testMessage(appID, appSecret, targetName);
+        if (res.success) {
+          testStatusEl.textContent = res.message || 'Message sent successfully!';
+          testStatusEl.className = 'success';
+        } else {
+          testStatusEl.textContent = 'Failed: ' + (res.error || 'unknown');
+          testStatusEl.className = 'error';
+        }
+      } catch (e) {
+        testStatusEl.textContent = 'Error: ' + e.message;
+        testStatusEl.className = 'error';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     $('command').addEventListener('change', updateBypassVisibility);
     load();
   </script>
 </body>
 </html>`
+}
+
+// getTenantAccessToken 用 appID + appSecret 获取飞书 tenant_access_token。
+func getTenantAccessToken(appID, appSecret string) (string, error) {
+	body, _ := json.Marshal(map[string]string{
+		"app_id":     appID,
+		"app_secret": appSecret,
+	})
+	resp, err := http.Post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Code              int    `json:"code"`
+		Msg               string `json:"msg"`
+		TenantAccessToken string `json:"tenant_access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if result.Code != 0 {
+		return "", fmt.Errorf("%s", result.Msg)
+	}
+	return result.TenantAccessToken, nil
+}
+
+type memberInfo struct {
+	OpenID string
+	Name   string
+}
+
+// getAllChats 获取 bot 加入的所有群聊的 chat_id。
+func getAllChats(token string) ([]string, error) {
+	var chatIDs []string
+	pageToken := ""
+	for {
+		url := "https://open.feishu.cn/open-apis/im/v1/chats?page_size=100"
+		if pageToken != "" {
+			url += "&page_token=" + pageToken
+		}
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		var result struct {
+			Code int `json:"code"`
+			Data struct {
+				Items     []struct {
+					ChatID string `json:"chat_id"`
+				} `json:"items"`
+				HasMore   bool   `json:"has_more"`
+				PageToken string `json:"page_token"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+		resp.Body.Close()
+		if result.Code != 0 {
+			return nil, fmt.Errorf("code %d", result.Code)
+		}
+		for _, item := range result.Data.Items {
+			chatIDs = append(chatIDs, item.ChatID)
+		}
+		if !result.Data.HasMore {
+			break
+		}
+		pageToken = result.Data.PageToken
+	}
+	return chatIDs, nil
+}
+
+// getChatMembers 获取指定群聊的所有成员（处理分页）。
+func getChatMembers(token, chatID string) ([]memberInfo, error) {
+	var members []memberInfo
+	pageToken := ""
+	for {
+		url := fmt.Sprintf("https://open.feishu.cn/open-apis/im/v1/chats/%s/members?page_size=100", chatID)
+		if pageToken != "" {
+			url += "&page_token=" + pageToken
+		}
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		var result struct {
+			Code int `json:"code"`
+			Data struct {
+				Items     []struct {
+					MemberID string `json:"member_id"`
+					Name     string `json:"name"`
+				} `json:"items"`
+				HasMore   bool   `json:"has_more"`
+				PageToken string `json:"page_token"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			resp.Body.Close()
+			return nil, err
+		}
+		resp.Body.Close()
+		if result.Code != 0 {
+			return nil, fmt.Errorf("code %d", result.Code)
+		}
+		for _, item := range result.Data.Items {
+			members = append(members, memberInfo{OpenID: item.MemberID, Name: item.Name})
+		}
+		if !result.Data.HasMore {
+			break
+		}
+		pageToken = result.Data.PageToken
+	}
+	return members, nil
+}
+
+// sendTestMessage 给指定 open_id 发送测试消息。
+func sendTestMessage(token, openID string) error {
+	body, _ := json.Marshal(map[string]string{
+		"receive_id": openID,
+		"content":    `{"text":"您好，这是FCC发送的测试消息！"}`,
+		"msg_type":   "text",
+	})
+	req, _ := http.NewRequest("POST", "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return err
+	}
+	if result.Code != 0 {
+		return fmt.Errorf("%s", result.Msg)
+	}
+	return nil
 }
 
 // detectTool identifies the selected AI tool from a command string.
