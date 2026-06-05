@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	configMu   sync.Mutex
-	configOpen bool
+	configMu      sync.Mutex
+	configOpen    bool
+	configProcess *os.Process
 )
 
 const (
@@ -55,7 +56,24 @@ func OpenConfig() {
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	_ = cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	configMu.Lock()
+	configProcess = cmd.Process
+	configMu.Unlock()
+	_ = cmd.Wait()
+}
+
+// KillConfigWindow kills the running config-window helper subprocess, if any.
+func KillConfigWindow() {
+	configMu.Lock()
+	p := configProcess
+	configProcess = nil
+	configMu.Unlock()
+	if p != nil {
+		_ = p.Kill()
+	}
 }
 
 // RunConfigWindow is the entry point for the --config-window helper mode.

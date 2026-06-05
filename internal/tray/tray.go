@@ -69,8 +69,8 @@ func handleClicks(configCh, quitCh <-chan struct{}, cfg Config) {
 				go cfg.OnOpenConfig()
 			}
 		case <-quitCh:
-			// 先跑「只有菜单 Quit 才该做的事」（比如杀 watchdog），
-			// 再触发 NSApp terminate，让 OnExit 跑通用清理（杀 tmux + cancel）。
+			// 先杀掉 config 窗口子进程（如果有），再跑用户回调。
+			KillConfigWindow()
 			if cfg.OnMenuQuit != nil {
 				cfg.OnMenuQuit()
 			}
