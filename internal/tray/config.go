@@ -707,6 +707,7 @@ func configHTML() string {
         const res = await window.applyUpdate();
         if (res.success) {
           btn.textContent = 'Restarting...';
+          window.closeWindow();
         } else {
           btn.textContent = 'Update failed: ' + (res.error || 'unknown');
           btn.disabled = false;
