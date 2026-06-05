@@ -13,12 +13,13 @@ var spinnerRunes = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏✱"
 // 例如：Waiting...、Running...
 var statusPromptRe = regexp.MustCompile(`^(Waiting|Running)\.\.\.`)
 
-// genericStatusRe 匹配通用的 ing... 状态提示。
-// Claude TUI 会用各种随机的 ing 词做动态状态（Seasoning、Jitterbugging、Drizzling 等），
-// 逐个维护不现实，所以用通用规则：
-// - 前面有特殊符号（非字母数字）后跟 ing... 词
-// - 或者包含时间标记 (Xs)、token 计数或 thought for
-var genericStatusRe = regexp.MustCompile(`[^a-zA-Z0-9\s_]\s*\w+ing\.\.\.|\w+ing\.\.\..*(\(\d+[smh]\)|tokens|thought for)`)
+// decorativeStatusRe 匹配形如 "✽ Bunning..." 的 TUI 装饰状态行。
+// 特征：行首一个特殊符号 + 空格 + ing 结尾的单词 + 省略号（... 或 …）。
+var decorativeStatusRe = regexp.MustCompile(`^[^a-zA-Z0-9\s_]\s+\w+ing(?:\.\.\.|…)`)
+
+// genericStatusRe 匹配带时间/token 后缀的 ing... 状态行。
+// 例如：Seasoning... (1.2s)、Jitterbugging... 128 tokens、Drizzling... thought for 3s
+var genericStatusRe = regexp.MustCompile(`^\w+ing(?:\.\.\.|…).*(?:\(\d+[smh]\)|tokens|thought for)`)
 
 // isClaudeDecorativeLine 判断一行是否是 Claude TUI 的纯装饰性状态行。
 // 这些行在终端中会被动态刷新覆盖，通过 tmux capture 抓到后不应发送到飞书，
@@ -39,7 +40,12 @@ func isClaudeDecorativeLine(line string) bool {
 		return true
 	}
 
-	// 规则3：通用 ing... 状态提示（覆盖 Seasoning、Jitterbugging、Drizzling 等未知词）
+	// 规则3：形如 "✽ Bunning..." 的 TUI 装饰状态行
+	if decorativeStatusRe.MatchString(line) {
+		return true
+	}
+
+	// 规则4：带时间/token 后缀的 ing... 状态行
 	if genericStatusRe.MatchString(line) {
 		return true
 	}
