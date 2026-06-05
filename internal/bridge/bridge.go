@@ -948,6 +948,7 @@ func (b *Bridge) RestartTmux(workDir string) error {
 
 	b.termMu.Lock()
 	b.term = tm
+	b.isClaude = isClaudeCommand(command)
 	b.termMu.Unlock()
 
 	if err := tm.WaitReady(); err != nil {
