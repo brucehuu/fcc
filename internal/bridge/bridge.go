@@ -33,7 +33,7 @@ type receiverState struct {
 	contentBuf strings.Builder // 累积的 markdown 内容
 
 	pendingTable      []string  // 等待更多流式行的 markdown 表格
-	pendingTableSince time.Time // pendingTable 首次出现时间
+	pendingTableSince time.Time // pendingTable 最近追加时间
 
 	pendingCode      []string // 等待闭合的流式代码块
 	pendingCodeLang  string
@@ -458,7 +458,7 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 		state.mu.Lock()
 		if !state.ready || filtered == state.lastPane {
 			state.mu.Unlock()
-			if b.flushPendingTableIfReady(ctx, key, state, 5*time.Second) || b.flushPendingCodeIfReady(ctx, key, state, 5*time.Second) {
+			if b.flushPendingTableIfReady(ctx, key, state, pendingTableIdleWait) || b.flushPendingCodeIfReady(ctx, key, state, 5*time.Second) {
 				hasDiff = true
 			}
 			return true
@@ -493,8 +493,9 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 }
 
 const (
-	maxMarkdownLen    = 3000 // interactive 卡片 JSON 有长度限制，内容留余量
-	markdownCardBreak = "\f"
+	maxMarkdownLen       = 3000 // interactive 卡片 JSON 有长度限制，内容留余量
+	pendingTableIdleWait = 12 * time.Second
+	markdownCardBreak    = "\f"
 )
 
 // sendBlocks 把 diff 内容格式化为 markdown 并追加到 receiver 的累积 buffer 中，
@@ -547,10 +548,8 @@ func (b *Bridge) sendBlocksWithTables(ctx context.Context, key receiverKey, stat
 	}
 	appendPendingTable := func(block string) {
 		lines := strings.Split(strings.TrimSpace(block), "\n")
-		if len(state.pendingTable) == 0 {
-			state.pendingTableSince = time.Now()
-		}
 		state.pendingTable = append(state.pendingTable, lines...)
+		state.pendingTableSince = time.Now()
 	}
 
 	for _, block := range blocks {

@@ -525,7 +525,7 @@ func buildTableCard(markdownTable string) (map[string]interface{}, error) {
 			"elements": []map[string]interface{}{
 				{
 					"tag":                 "table",
-					"page_size":           min(max(len(rows), 1), 10),
+					"page_size":           max(len(rows), 1),
 					"row_height":          "auto",
 					"row_max_height":      "360px",
 					"freeze_first_column": false,

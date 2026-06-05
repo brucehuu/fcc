@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -160,6 +161,30 @@ func TestBuildTableCardUsesPercentageColumnWidths(t *testing.T) {
 		if column["width"] != want[i] {
 			t.Fatalf("column %d width = %v, want %s", i, column["width"], want[i])
 		}
+	}
+}
+
+func TestBuildTableCardShowsAllRowsOnOnePage(t *testing.T) {
+	lines := []string{
+		"| A | B |",
+		"| --- | --- |",
+	}
+	for i := 1; i <= 12; i++ {
+		lines = append(lines, fmt.Sprintf("| row-%02d | value-%02d |", i, i))
+	}
+	card, err := buildTableCard(strings.Join(lines, "\n"))
+	if err != nil {
+		t.Fatalf("buildTableCard() error = %v", err)
+	}
+	body := card["body"].(map[string]interface{})
+	elements := body["elements"].([]map[string]interface{})
+	table := elements[0]
+	if table["page_size"] != 12 {
+		t.Fatalf("page_size = %v, want 12", table["page_size"])
+	}
+	rows := table["rows"].([]map[string]interface{})
+	if len(rows) != 12 {
+		t.Fatalf("rows = %d, want 12", len(rows))
 	}
 }
 

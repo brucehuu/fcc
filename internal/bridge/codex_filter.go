@@ -298,8 +298,20 @@ func codexPlainTableCellTexts(cells []codexPlainTableCell, colCount int) []strin
 func appendCodexPlainTableContinuation(row []string, cells []codexPlainTableCell, colStarts []int) {
 	for _, cell := range cells {
 		idx := nearestCodexPlainTableColumn(cell.start, colStarts)
-		row[idx] = strings.TrimSpace(row[idx] + " " + cell.text)
+		row[idx] = appendCodexPlainTableCellText(row[idx], cell.text)
 	}
+}
+
+func appendCodexPlainTableCellText(prev, next string) string {
+	prev = strings.TrimSpace(prev)
+	next = strings.TrimSpace(next)
+	if prev == "" {
+		return next
+	}
+	if next == "" {
+		return prev
+	}
+	return prev + codexWrappedLineSeparator(prev, next) + next
 }
 
 func nearestCodexPlainTableColumn(start int, colStarts []int) int {

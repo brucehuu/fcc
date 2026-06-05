@@ -307,7 +307,7 @@ func TestFilterPaneCodexWidePlainTableWithWrappedCells(t *testing.T) {
 		"",
 		"| 范围 | 规则 | 允许使用 seed 数据的情况 | 默认行为 |",
 		"| --- | --- | --- | --- |",
-		"| /Users/huguobiao/code/fcc 以及本机所有本地项目 | 不要用 seed 数据覆盖或刷新项目数据库 | 1. 首次部署且目标数据库完全为空；2. 你明确要求 reseed/refresh | 保留现有项目数据，seed 脚本 应保持非破坏性 |",
+		"| /Users/huguobiao/code/fcc 以及本机所有本地项目 | 不要用 seed 数据覆盖或刷新项目数据库 | 1. 首次部署且目标数据库完全为空；2. 你明确要求 reseed/refresh | 保留现有项目数据，seed 脚本应保持非破坏性 |",
 		"",
 		"如果你指的是上一轮某个具体结果，把要比较的内容或数据再发我一下，我可以直接按表格重做。",
 	}, "\n")
@@ -334,13 +334,61 @@ func TestFilterPaneCodexWideTableKeepsWrappedRowsTogether(t *testing.T) {
 	want := strings.Join([]string{
 		"| 方向 | 优点 | 缺点 / 风险 | 适合程度 |",
 		"| --- | --- | --- | --- |",
-		"| 直接转发终端原始输出 | 实现简单；最接近本地终端；不容易漏内容 | 手机飞书很难读；TUI 边框、提示、工具日志噪 声多；表格/代码/JSON 容易变形 | 低 |",
-		"| 当前方案：抓 tmux 屏幕 + 过滤 + diff + 飞书卡片 | 已经能跑通 Codex/Claude；不依赖 Codex 内部 API；能实时更新；兼容多工具 | 本质靠启发式猜内容类型；容易误判表格/代 码；TUI 改版会影响过滤规则 | 中高 |",
+		"| 直接转发终端原始输出 | 实现简单；最接近本地终端；不容易漏内容 | 手机飞书很难读；TUI 边框、提示、工具日志噪声多；表格/代码/JSON 容易变形 | 低 |",
+		"| 当前方案：抓 tmux 屏幕 + 过滤 + diff + 飞书卡片 | 已经能跑通 Codex/Claude；不依赖 Codex 内部 API；能实时更新；兼容多工具 | 本质靠启发式猜内容类型；容易误判表格/代码；TUI 改版会影响过滤规则 | 中高 |",
 		"",
 		"我的判断：短期继续沿用当前方案。",
 	}, "\n")
 	if got := b.filterPane(input); got != want {
 		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneCodexKeepsLongAdjacentPlainTablesComplete(t *testing.T) {
+	b := &Bridge{
+		isCodex:       true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := strings.Join([]string{
+		"• 静态看下来：这是一个 macOS 本机常驻的 Feishu ↔ tmux ↔ AI CLI 桥接工具。",
+		"",
+		"   维度                 优点                                                                                                                                      缺点 / 风险",
+		"  ━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+		"   产品定位             场景非常明确：用飞书远程操控本机 Claude/Codex/Aider，不需要公网 IP。                                                                      强依赖飞书机器人权限、WebSocket、tmux、本机进程状态，排障面比",
+		"                                                                                                                                                                  较宽。",
+		"  ───────────────────  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────",
+		"   架构拆分             模块边界清楚：main 管生命周期，internal/bridge/bridge.go:43 管桥接，internal/bot/bot.go:1 管飞书，internal/terminal/tmux.go:1 管终端。    bridge.go 体量很大，输出过滤、diff、表格、代码块、发送状态都",
+		"                                                                                                                                                                  堆在一起，后续维护成本高。",
+		"  ───────────────────  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────  ───────────────────────────────────────────────────────────────",
+		"   数据安全             这个项目本身没有业务数据库，也没有 seed/migration 主路径，当前全局 seed 安全规则基本不触发。                                              有本地日志、图片缓存、.env 密钥，真正的数据风险在本机文件和飞",
+		"                                                                                                                                                                  书消息内容，不在数据库。",
+		"",
+		"   综合判断            结论",
+		"  ━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+		"   当前质量            已经不是玩具脚本，是一个能长期运行的本机工具雏形。",
+		"  ──────────────────  ────────────────────────────────────────────────────────────────────────────────────────",
+		"   最大优势            场景窄、路径清楚、围绕真实 Feishu + tmux + Codex 使用在打磨。",
+		"  ──────────────────  ────────────────────────────────────────────────────────────────────────────────────────",
+		"   最大短板            bridge 复杂度膨胀，生命周期操作偏强，后续每次改动都必须靠测试和真实运行验证兜住。",
+		"  ──────────────────  ────────────────────────────────────────────────────────────────────────────────────────",
+		"   我会优先盯的风险    输出过滤误删/乱序、发送 goroutine 并发、watchdog 误杀、自动更新替换失败、secret 泄露。",
+		"",
+		"  最后复查 git status --short --branch 只显示 main...origin/main。",
+	}, "\n")
+	got := b.filterPane(input)
+
+	for _, want := range []string{
+		"| 数据安全 | 这个项目本身没有业务数据库，也没有 seed/migration 主路径，当前全局 seed 安全规则基本不触发。 | 有本地日志、图片缓存、.env 密钥，真正的数据风险在本机文件和飞书消息内容，不在数据库。 |",
+		"| 最大短板 | bridge 复杂度膨胀，生命周期操作偏强，后续每次改动都必须靠测试和真实运行验证兜住。 |",
+		"| 我会优先盯的风险 | 输出过滤误删/乱序、发送 goroutine 并发、watchdog 误杀、自动更新替换失败、secret 泄露。 |",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("filtered output missing table row:\n%s\n\ngot:\n%s", want, got)
+		}
+	}
+
+	if strings.Count(got, "| 产品定位 |") != 1 {
+		t.Fatalf("expected product row once, got output:\n%s", got)
 	}
 }
 
@@ -1469,6 +1517,47 @@ func TestSendBlocksBuffersStreamingTableRows(t *testing.T) {
 	texts := ms.Texts()
 	if len(texts) != 2 || texts[0] != "intro" || texts[1] != "请确认" {
 		t.Errorf("texts = %v, want [intro 请确认]", texts)
+	}
+}
+
+func TestSendBlocksRefreshesStreamingTableIdleDeadline(t *testing.T) {
+	ms := &mockMessenger{}
+	b := &Bridge{
+		messenger:     ms,
+		sendTimeout:   10 * time.Second,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	key := receiverKey{id: "user1", kind: "open_id"}
+	state := &receiverState{}
+	b.receivers.Store(key, state)
+
+	ctx := context.Background()
+	b.sendBlocks(ctx, key, "| 维度 | 优点 | 缺点 / 风险 |\n| --- | --- | --- |\n| 产品定位 | 场景明确 | 排障面宽 |")
+	if len(ms.Tables()) != 0 {
+		t.Fatalf("initial table should be buffered, got tables: %v", ms.Tables())
+	}
+
+	state.pendingTableSince = time.Now().Add(-6 * time.Second)
+	b.sendBlocks(ctx, key, "| 架构拆分 | 模块边界清楚 | bridge.go 体量很大 |")
+	if b.flushPendingTableIfReady(ctx, key, state, 5*time.Second) {
+		t.Fatal("new table rows should refresh idle deadline instead of flushing immediately")
+	}
+	if len(ms.Tables()) != 0 {
+		t.Fatalf("table should still be buffered, got tables: %v", ms.Tables())
+	}
+
+	state.pendingTableSince = time.Now().Add(-6 * time.Second)
+	if !b.flushPendingTableIfReady(ctx, key, state, 5*time.Second) {
+		t.Fatal("expected table to flush after renewed idle deadline")
+	}
+	wantTable := strings.Join([]string{
+		"| 维度 | 优点 | 缺点 / 风险 |",
+		"| --- | --- | --- |",
+		"| 产品定位 | 场景明确 | 排障面宽 |",
+		"| 架构拆分 | 模块边界清楚 | bridge.go 体量很大 |",
+	}, "\n")
+	if tables := ms.Tables(); len(tables) != 1 || tables[0] != wantTable {
+		t.Fatalf("tables = %v, want [%q]", tables, wantTable)
 	}
 }
 
