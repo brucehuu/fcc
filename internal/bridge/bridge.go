@@ -29,8 +29,11 @@ type receiverState struct {
 	sendMu   sync.Mutex
 
 	// 累积消息模式：所有内容追加到一条 markdown 消息中
-	messageID  string        // 当前累积消息的 open_message_id
+	messageID  string          // 当前累积消息的 open_message_id
 	contentBuf strings.Builder // 累积的 markdown 内容
+
+	pendingTable      []string  // 等待更多流式行的 markdown 表格
+	pendingTableSince time.Time // pendingTable 首次出现时间
 }
 
 // BridgeConfig 创建 Bridge 所需的全部配置
@@ -68,8 +71,8 @@ type Bridge struct {
 	isClaude          bool   // 仅 Claude 命令启用装饰性状态行过滤
 	targetName        string // 首次启动欢迎消息的目标用户
 
-	lastUserMessage   string      // 最近从飞书收到的用户消息，用于过滤 tmux 回显
-	lastUserMsgMu     sync.Mutex  // 保护 lastUserMessage
+	lastUserMessage string     // 最近从飞书收到的用户消息，用于过滤 tmux 回显
+	lastUserMsgMu   sync.Mutex // 保护 lastUserMessage
 }
 
 // bridgeMetrics 轻量级运行时指标
@@ -438,6 +441,9 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 		state.mu.Lock()
 		if !state.ready || filtered == state.lastPane {
 			state.mu.Unlock()
+			if b.flushPendingTableIfReady(ctx, key, state, 2*time.Second) {
+				hasDiff = true
+			}
 			return true
 		}
 		last := state.lastPane
@@ -480,6 +486,119 @@ func (b *Bridge) sendBlocks(ctx context.Context, key receiverKey, diff string) {
 	val, _ := b.receivers.Load(key)
 	state := val.(*receiverState)
 
+	if len(state.pendingTable) > 0 || hasMarkdownTableLineBlock(blocks) {
+		b.sendBlocksWithTables(ctx, key, state, blocks)
+		return
+	}
+
+	b.sendMarkdownBlocks(ctx, key, state, blocks)
+}
+
+func hasMarkdownTableLineBlock(blocks []string) bool {
+	for _, block := range blocks {
+		if isMarkdownTableLineBlock(block) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bridge) sendBlocksWithTables(ctx context.Context, key receiverKey, state *receiverState, blocks []string) {
+	var textBlocks []string
+	hadPending := len(state.pendingTable) > 0
+
+	flushText := func() {
+		if len(textBlocks) == 0 {
+			return
+		}
+		b.sendMarkdownBlocks(ctx, key, state, textBlocks)
+		textBlocks = nil
+	}
+	flushTable := func() {
+		if len(state.pendingTable) == 0 {
+			return
+		}
+		table := strings.Join(state.pendingTable, "\n")
+		state.pendingTable = nil
+		state.pendingTableSince = time.Time{}
+		b.sendInteractiveTableOrMarkdown(ctx, key, state, table)
+	}
+	appendPendingTable := func(block string) {
+		lines := strings.Split(strings.TrimSpace(block), "\n")
+		if len(state.pendingTable) == 0 {
+			state.pendingTableSince = time.Now()
+		}
+		state.pendingTable = append(state.pendingTable, lines...)
+	}
+
+	for _, block := range blocks {
+		if block == "" {
+			continue
+		}
+		if !isMarkdownTableLineBlock(block) {
+			flushTable()
+			textBlocks = append(textBlocks, block)
+			continue
+		}
+
+		flushText()
+		if isMarkdownTable(block) {
+			if len(state.pendingTable) > 0 {
+				flushTable()
+			}
+			appendPendingTable(block)
+			continue
+		}
+
+		if len(state.pendingTable) > 0 {
+			appendPendingTable(block)
+			continue
+		}
+		textBlocks = append(textBlocks, block)
+	}
+
+	if len(state.pendingTable) > 0 && (hadPending || markdownTableDataRowCount(state.pendingTable) >= 2) {
+		flushTable()
+	}
+
+	flushText()
+}
+
+func (b *Bridge) flushPendingTableIfReady(ctx context.Context, key receiverKey, state *receiverState, wait time.Duration) bool {
+	state.sendMu.Lock()
+	defer state.sendMu.Unlock()
+	if len(state.pendingTable) == 0 || time.Since(state.pendingTableSince) < wait {
+		return false
+	}
+
+	table := strings.Join(state.pendingTable, "\n")
+	state.pendingTable = nil
+	state.pendingTableSince = time.Time{}
+	b.sendInteractiveTableOrMarkdown(ctx, key, state, table)
+	return true
+}
+
+func (b *Bridge) sendInteractiveTableOrMarkdown(ctx context.Context, key receiverKey, state *receiverState, table string) {
+	timeout := b.sendTimeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	sendCtx, cancel := context.WithTimeout(ctx, timeout)
+	err := b.messenger.SendInteractiveTable(sendCtx, key.kind, key.id, table)
+	cancel()
+	if err != nil {
+		log.Warnf("[bridge] send interactive table failed: %v, falling back to markdown", err)
+		b.sendMarkdownBlocks(ctx, key, state, []string{table})
+		return
+	}
+
+	b.metrics.messagesSent.Add(1)
+	// 表格独立成卡片；后续文本新开卡片，保持表格前后消息顺序。
+	state.messageID = ""
+	state.contentBuf.Reset()
+}
+
+func (b *Bridge) sendMarkdownBlocks(ctx context.Context, key receiverKey, state *receiverState, blocks []string) {
 	var newContent strings.Builder
 	for _, block := range blocks {
 		if block == "" {
@@ -604,7 +723,7 @@ func isMarkdownTableLine(line string) bool {
 
 func isMarkdownTable(block string) bool {
 	lines := strings.Split(block, "\n")
-	if len(lines) < 2 {
+	if len(lines) < 2 || !isMarkdownSeparatorLine(lines[1]) {
 		return false
 	}
 	// 至少有两行且都是表格行
@@ -614,6 +733,55 @@ func isMarkdownTable(block string) bool {
 		}
 	}
 	return true
+}
+
+func isMarkdownTableLineBlock(block string) bool {
+	lines := strings.Split(block, "\n")
+	if len(lines) == 0 {
+		return false
+	}
+	for _, line := range lines {
+		if !isMarkdownTableLine(line) {
+			return false
+		}
+	}
+	return true
+}
+
+func isMarkdownSeparatorLine(line string) bool {
+	cells := parseTableCells(line)
+	if len(cells) == 0 {
+		return false
+	}
+	for _, cell := range cells {
+		cell = strings.TrimSpace(cell)
+		cell = strings.TrimPrefix(strings.TrimSuffix(cell, ":"), ":")
+		if len(cell) < 3 {
+			return false
+		}
+		for _, r := range cell {
+			if r != '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func markdownTableDataRowCount(lines []string) int {
+	count := 0
+	for i, line := range lines {
+		if i == 1 && isMarkdownSeparatorLine(line) {
+			continue
+		}
+		if i == 0 {
+			continue
+		}
+		if isMarkdownTableLine(line) {
+			count++
+		}
+	}
+	return count
 }
 
 // filterPane 过滤噪音，并将 Unicode 表格转换为 Markdown 表格
@@ -627,9 +795,42 @@ func (b *Bridge) filterPane(pane string) string {
 	userMsg := b.lastUserMessage
 	b.lastUserMsgMu.Unlock()
 
+	skipClaudeProgressContinuation := false
+	skipClaudeToolOutput := false
 	for i := 0; i < len(lines); i++ {
 		line := strings.TrimSpace(lines[i])
 		if line == "" {
+			skipClaudeToolOutput = false
+			continue
+		}
+
+		if b.isClaude && skipClaudeToolOutput {
+			if isClaudeToolProgressLine(line) {
+				continue
+			}
+			if IsClaudeAssistantTextLine(line) || IsClaudeUserPromptLine(line) {
+				skipClaudeToolOutput = false
+			} else {
+				continue
+			}
+		}
+
+		if b.isClaude && isClaudeToolProgressLine(line) {
+			skipClaudeToolOutput = true
+			continue
+		}
+
+		if b.isClaude && skipClaudeProgressContinuation && IsClaudeLiveProgressContinuation(line) {
+			continue
+		}
+		skipClaudeProgressContinuation = false
+
+		if b.isClaude && IsClaudeLiveProgressLine(line) {
+			skipClaudeProgressContinuation = true
+			continue
+		}
+
+		if b.isClaude && IsClaudeUserEchoLine(line, userMsg) {
 			continue
 		}
 
@@ -686,7 +887,11 @@ func (b *Bridge) isNoiseLine(line string) bool {
 			return true
 		}
 	}
-	if strings.Contains(lower, "esc to interrupt") || strings.Contains(lower, "for shortcuts") {
+	if strings.Contains(lower, "esc to interrupt") ||
+		strings.Contains(lower, "for shortcuts") ||
+		strings.Contains(lower, "bypass permissions on") ||
+		strings.Contains(lower, "shift+tab to cycle") ||
+		strings.Contains(lower, "press up to edit queued messages") {
 		return true
 	}
 	// Claude TUI 输入提示符 "> " 或 ">" 单独成行

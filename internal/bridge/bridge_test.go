@@ -53,7 +53,7 @@ func TestMatchCommand(t *testing.T) {
 		{"bash", "claude", false},
 		{"aider", "codex", false},
 		{"", "claude", false},
-		{"-claude", "claude", false}, // 选项被跳过
+		{"-claude", "claude", false},  // 选项被跳过
 		{"-- claude", "claude", true}, // "--" 后开始算
 	}
 	for _, tt := range tests {
@@ -114,6 +114,16 @@ func TestFilterPane(t *testing.T) {
 			"",
 		},
 		{
+			"Claude bypass 状态栏过滤",
+			"hello\n▸▸ bypass permissions on (shift+tab to cycle)",
+			"hello",
+		},
+		{
+			"Claude queued message 提示过滤",
+			"hello\nPress up to edit queued messages",
+			"hello",
+		},
+		{
 			"TUI 提示符过滤",
 			"> \n> hi",
 			"> hi",
@@ -136,6 +146,86 @@ func TestFilterPane(t *testing.T) {
 				t.Errorf("filterPane() =\n%q\nwant:\n%q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFilterPaneClaudeDynamicProgress(t *testing.T) {
+	b := &Bridge{
+		isClaude:      true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := "⏺ Bash(grep -rn \"filter\" /Users/huguobiao/code/fcc --include=\"*.py\" | grep -i\n" +
+		"○ Explore  Find filter logic for TUI/Tip\n" +
+		"lines                         44s\n" +
+		"○ Explore  Find filter logic for TUI/Tip lines                         45s\n" +
+		"⏺ 你好！有什么我可以帮你的吗？"
+	want := "⏺ 你好！有什么我可以帮你的吗？"
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestFilterPaneClaudeToolOutputBlock(t *testing.T) {
+	b := &Bridge{
+		isClaude:      true,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	input := "⏺ Bash(ls -la)\n" +
+		"  ⎿  $ ls -la\n" +
+		"     M internal/bridge/bridge.go\n" +
+		"     diff --git a/internal/bridge/bridge.go b/internal/bridge/bridge.go\n" +
+		"     ok         feishu-connect/internal/bridge  (cached)\n\n" +
+		"⏺ 这里是分析结果。"
+	want := "⏺ 这里是分析结果。"
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestClaudeDecorativeLineVariants(t *testing.T) {
+	tests := []string{
+		"✢ Galloping…",
+		"\x1b[2K✢ Galloping…",
+		"Waiting…",
+		"Seasoning... (1.2s)",
+		"⎿ \u00a0Tip: Ask Claude to create a todo list",
+	}
+	for _, input := range tests {
+		if !isClaudeDecorativeLine(input) {
+			t.Errorf("isClaudeDecorativeLine(%q) = false, want true", input)
+		}
+	}
+}
+
+func TestFilterPaneClaudeUserEcho(t *testing.T) {
+	b := &Bridge{
+		isClaude:        true,
+		noisePatterns:   []string{"fluttering", "nesting", "thinking"},
+		lastUserMessage: "你帮我返回一个表格看一下，我看能不能够正常的展示",
+	}
+	input := "› 你帮我返回一个表格看一下，我看能不能够正常的展示\n" +
+		"⏺ 可以，我给你一个简单表格。"
+	want := "⏺ 可以，我给你一个简单表格。"
+	if got := b.filterPane(input); got != want {
+		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
+	}
+}
+
+func TestClaudeUserEchoLineVariants(t *testing.T) {
+	userMsg := "你帮我返回一个表格看一下，我看能不能够正常的展示"
+	tests := []string{
+		"❯ 你帮我返回一个表格看一下，我看能不能够正常的展示",
+		"›\u00a0你帮我返回一个表格看一下，我看能不能够正常的展示",
+		"> 你帮我返回一个表格看一下，我看能不能够正常的展示",
+	}
+	for _, input := range tests {
+		if !IsClaudeUserEchoLine(input, userMsg) {
+			t.Errorf("IsClaudeUserEchoLine(%q, %q) = false, want true", input, userMsg)
+		}
+	}
+
+	if IsClaudeUserEchoLine("⏺ 你帮我返回一个表格看一下，我看能不能够正常的展示", userMsg) {
+		t.Error("IsClaudeUserEchoLine should not filter normal Claude response lines")
 	}
 }
 
@@ -259,7 +349,7 @@ func TestIsMarkdownTableLine(t *testing.T) {
 }
 
 func TestSplitDiffIntoBlocks(t *testing.T) {
-	input := "| A | B |\n| 1 | 2 |\nplain text\nanother line"
+	input := "| A | B |\n| --- | --- |\n| 1 | 2 |\nplain text\nanother line"
 	got := splitDiffIntoBlocks(input)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 blocks, got %d: %v", len(got), got)
@@ -298,7 +388,8 @@ func TestSplitDiffIntoBlocksEdgeCases(t *testing.T) {
 	}{
 		{"empty", "", 0, false},
 		{"all text", "hello\nworld", 1, false},
-		{"all table", "| A | B |\n| 1 | 2 |", 1, true},
+		{"all table", "| A | B |\n| --- | --- |\n| 1 | 2 |", 1, true},
+		{"table rows without separator", "| 1 | 2 |\n| 3 | 4 |", 1, false},
 		{"mixed", "| A | B |\nplain", 2, false},
 	}
 	for _, tt := range tests {
@@ -382,8 +473,8 @@ func (m *mockMessenger) UpdateMessage(ctx context.Context, messageID, content st
 	return nil
 }
 func (m *mockMessenger) SendWelcome(ctx context.Context, targetName, text string) error { return nil }
-func (m *mockMessenger) CleanupOldImages(maxAge time.Duration) error { return nil }
-func (m *mockMessenger) Close() {}
+func (m *mockMessenger) CleanupOldImages(maxAge time.Duration) error                    { return nil }
+func (m *mockMessenger) Close()                                                         {}
 
 func (m *mockMessenger) Texts() []string {
 	m.mu.Lock()
@@ -405,8 +496,8 @@ type mockTerminal struct {
 }
 
 func (t *mockTerminal) Start(command, workDir string) error { return nil }
-func (t *mockTerminal) SendKeys(text string) error       { return nil }
-func (t *mockTerminal) SendSpecialKey(key string) error  { return nil }
+func (t *mockTerminal) SendKeys(text string) error          { return nil }
+func (t *mockTerminal) SendSpecialKey(key string) error     { return nil }
 func (t *mockTerminal) CaptureVisible(historyLines int) (string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -417,17 +508,17 @@ func (t *mockTerminal) CaptureVisible(historyLines int) (string, error) {
 	t.index++
 	return s, nil
 }
-func (t *mockTerminal) WaitReady() error    { return nil }
-func (t *mockTerminal) Kill() error         { return nil }
-func (t *mockTerminal) HasSession() bool    { return true }
-func (t *mockTerminal) IsAvailable() bool   { return true }
+func (t *mockTerminal) WaitReady() error  { return nil }
+func (t *mockTerminal) Kill() error       { return nil }
+func (t *mockTerminal) HasSession() bool  { return true }
+func (t *mockTerminal) IsAvailable() bool { return true }
 
 func TestCaptureAndSend(t *testing.T) {
 	tm := &mockTerminal{
 		captures: []string{
-			"hello\nworld",          // tick 1: baseline
-			"hello\nworld\nfoo",     // tick 2: diff = foo
-			"hello\nworld\nfoo",     // tick 3: no diff
+			"hello\nworld",      // tick 1: baseline
+			"hello\nworld\nfoo", // tick 2: diff = foo
+			"hello\nworld\nfoo", // tick 3: no diff
 		},
 	}
 	ms := &mockMessenger{}
@@ -475,7 +566,7 @@ func TestCaptureAndSend(t *testing.T) {
 func TestCaptureAndSendTable(t *testing.T) {
 	tm := &mockTerminal{
 		captures: []string{
-			"header\n│ A │ B │\n│ 1 │ 2 │",
+			"header\n│ A │ B │\n│ 1 │ 2 │\n│ 3 │ 4 │",
 		},
 	}
 	ms := &mockMessenger{}
@@ -497,13 +588,50 @@ func TestCaptureAndSendTable(t *testing.T) {
 	b.captureAndSend(ctx)
 	time.Sleep(50 * time.Millisecond)
 
-	// 表格现在通过 SendMarkdown 发送，不再走 SendInteractiveTable
-	if len(ms.Tables()) != 0 {
-		t.Errorf("expected 0 table messages (now sent as markdown), got %d", len(ms.Tables()))
+	tables := ms.Tables()
+	if len(tables) != 1 {
+		t.Errorf("expected 1 table message, got %d", len(tables))
 	}
 	texts := ms.Texts()
 	if len(texts) != 1 {
-		t.Errorf("expected 1 markdown message, got %d", len(texts))
+		t.Errorf("expected 1 markdown text message, got %d", len(texts))
+	} else if texts[0] != "header" {
+		t.Errorf("expected text header, got %q", texts[0])
+	}
+}
+
+func TestSendBlocksBuffersStreamingTableRows(t *testing.T) {
+	ms := &mockMessenger{}
+	b := &Bridge{
+		messenger:     ms,
+		sendTimeout:   10 * time.Second,
+		noisePatterns: []string{"fluttering", "nesting", "thinking"},
+	}
+	key := receiverKey{id: "user1", kind: "open_id"}
+	state := &receiverState{}
+	b.receivers.Store(key, state)
+
+	ctx := context.Background()
+	b.sendBlocks(ctx, key, "intro\n| 功能 | 状态 |\n| --- | --- |\n| 用户认证 | 已完成 |")
+
+	if len(ms.Tables()) != 0 {
+		t.Fatalf("first partial table should be buffered, got tables: %v", ms.Tables())
+	}
+
+	b.sendBlocks(ctx, key, "| 数据导出 | 进行中 |\n| 移动端适配 | 已完成 |\n请确认")
+
+	tables := ms.Tables()
+	if len(tables) != 1 {
+		t.Fatalf("expected 1 merged table, got %d: %v", len(tables), tables)
+	}
+	wantTable := "| 功能 | 状态 |\n| --- | --- |\n| 用户认证 | 已完成 |\n| 数据导出 | 进行中 |\n| 移动端适配 | 已完成 |"
+	if tables[0] != wantTable {
+		t.Errorf("merged table =\n%q\nwant:\n%q", tables[0], wantTable)
+	}
+
+	texts := ms.Texts()
+	if len(texts) != 2 || texts[0] != "intro" || texts[1] != "请确认" {
+		t.Errorf("texts = %v, want [intro 请确认]", texts)
 	}
 }
 
