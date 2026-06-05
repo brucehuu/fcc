@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -201,11 +202,11 @@ func TestFilterPaneClaudeUserEcho(t *testing.T) {
 	b := &Bridge{
 		isClaude:        true,
 		noisePatterns:   []string{"fluttering", "nesting", "thinking"},
-		lastUserMessage: "你帮我返回一个表格看一下，我看能不能够正常的展示",
+		lastUserMessage: "老样子，你帮我看看当前的项目有没有什么问题，但是不要做任何动作",
 	}
-	input := "› 你帮我返回一个表格看一下，我看能不能够正常的展示\n" +
-		"⏺ 可以，我给你一个简单表格。"
-	want := "⏺ 可以，我给你一个简单表格。"
+	input := "› 来了老弟\n" +
+		"⏺ 好，我先看看项目结构和代码，不做任何改动。"
+	want := "⏺ 好，我先看看项目结构和代码，不做任何改动。"
 	if got := b.filterPane(input); got != want {
 		t.Errorf("filterPane() =\n%q\nwant:\n%q", got, want)
 	}
@@ -226,6 +227,13 @@ func TestClaudeUserEchoLineVariants(t *testing.T) {
 
 	if IsClaudeUserEchoLine("⏺ 你帮我返回一个表格看一下，我看能不能够正常的展示", userMsg) {
 		t.Error("IsClaudeUserEchoLine should not filter normal Claude response lines")
+	}
+
+	if !IsClaudeTUIUserPromptLine("› 来了老弟") {
+		t.Error("IsClaudeTUIUserPromptLine should match prior Claude prompt echoes")
+	}
+	if IsClaudeTUIUserPromptLine("> quoted markdown") {
+		t.Error("IsClaudeTUIUserPromptLine should not match ASCII markdown blockquotes")
 	}
 }
 
@@ -428,6 +436,78 @@ func TestFlushTableEdgeCases(t *testing.T) {
 	}
 }
 
+func TestCompactMarkdownSpacing(t *testing.T) {
+	input := "\nhello  \n\n\nworld\n\n\n- a\n\n- b\n\n"
+	want := "hello\n\nworld\n\n- a\n\n- b"
+	if got := compactMarkdownSpacing(input); got != want {
+		t.Errorf("compactMarkdownSpacing() = %q, want %q", got, want)
+	}
+}
+
+func TestSendMarkdownBlocksUsesTightSpacing(t *testing.T) {
+	ms := &mockMessenger{}
+	b := &Bridge{
+		messenger:   ms,
+		sendTimeout: 10 * time.Second,
+	}
+	key := receiverKey{id: "user1", kind: "open_id"}
+	state := &receiverState{}
+	b.receivers.Store(key, state)
+
+	ctx := context.Background()
+	b.sendMarkdownBlocks(ctx, key, state, []string{"hello", "world"})
+	b.sendMarkdownBlocks(ctx, key, state, []string{"foo\n\n\nbar"})
+
+	texts := ms.Texts()
+	if len(texts) != 2 {
+		t.Fatalf("expected send + update, got %d messages: %v", len(texts), texts)
+	}
+	want := "hello\nworld\nfoo\n\nbar"
+	if texts[1] != want {
+		t.Errorf("updated markdown = %q, want %q", texts[1], want)
+	}
+}
+
+func TestSendMarkdownContentOpensNewCardWhenFull(t *testing.T) {
+	ms := &mockMessenger{}
+	b := &Bridge{
+		messenger:   ms,
+		sendTimeout: 10 * time.Second,
+	}
+	key := receiverKey{id: "user1", kind: "open_id"}
+	state := &receiverState{}
+	b.receivers.Store(key, state)
+
+	ctx := context.Background()
+	nearLimit := strings.Repeat("a", maxMarkdownLen-10)
+	b.sendMarkdownContent(ctx, key, state, nearLimit)
+	b.sendMarkdownContent(ctx, key, state, "second card content")
+
+	texts := ms.Texts()
+	if len(texts) != 2 {
+		t.Fatalf("expected first card send and second card send, got %d messages", len(texts))
+	}
+	if strings.Contains(texts[1], "前面内容已省略") {
+		t.Fatalf("second card should not use truncation marker: %q", texts[1])
+	}
+	if texts[1] != "second card content" {
+		t.Errorf("second card = %q, want new content only", texts[1])
+	}
+}
+
+func TestSplitMarkdownContent(t *testing.T) {
+	got := splitMarkdownContent("aaa\nbbb\nccc", 7)
+	want := []string{"aaa", "bbb\nccc"}
+	if len(got) != len(want) {
+		t.Fatalf("splitMarkdownContent len = %d, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("splitMarkdownContent[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestIsHorizontalBorderEdgeCases(t *testing.T) {
 	if isHorizontalBorder("") {
 		t.Error("isHorizontalBorder(\"\") should be false")
@@ -588,15 +668,23 @@ func TestCaptureAndSendTable(t *testing.T) {
 	b.captureAndSend(ctx)
 	time.Sleep(50 * time.Millisecond)
 
-	tables := ms.Tables()
-	if len(tables) != 1 {
-		t.Errorf("expected 1 table message, got %d", len(tables))
+	if len(ms.Tables()) != 0 {
+		t.Fatalf("table should be buffered before idle flush, got %v", ms.Tables())
 	}
 	texts := ms.Texts()
 	if len(texts) != 1 {
 		t.Errorf("expected 1 markdown text message, got %d", len(texts))
 	} else if texts[0] != "header" {
 		t.Errorf("expected text header, got %q", texts[0])
+	}
+
+	state.pendingTableSince = time.Now().Add(-6 * time.Second)
+	if !b.flushPendingTableIfReady(ctx, key, state, 5*time.Second) {
+		t.Fatal("expected idle flush to send buffered table")
+	}
+	tables := ms.Tables()
+	if len(tables) != 1 {
+		t.Errorf("expected 1 table message after idle flush, got %d", len(tables))
 	}
 }
 

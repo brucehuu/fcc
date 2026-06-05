@@ -44,6 +44,8 @@ var toolProgressRe = regexp.MustCompile(`^(?:[^\pL\pN\s_]\s+)?(?:[⎿└╰]\s*)
 // 例如："❯ 你好"、"› 你好"、"> 你好"。
 var userEchoPromptRe = regexp.MustCompile(`^[❯›>]\s*`)
 
+var claudeTUIUserPromptRe = regexp.MustCompile(`^[❯›]\s*`)
+
 var claudeAssistantTextRe = regexp.MustCompile(`^⏺\s+`)
 
 // isClaudeDecorativeLine 判断一行是否是 Claude TUI 的纯装饰性状态行。
@@ -122,6 +124,11 @@ func IsClaudeAssistantTextLine(line string) bool {
 func IsClaudeUserPromptLine(line string) bool {
 	line = normalizeClaudeLine(line)
 	return userEchoPromptRe.MatchString(line)
+}
+
+func IsClaudeTUIUserPromptLine(line string) bool {
+	line = normalizeClaudeLine(line)
+	return claudeTUIUserPromptRe.MatchString(line)
 }
 
 func IsClaudeUserEchoLine(line, userMessage string) bool {

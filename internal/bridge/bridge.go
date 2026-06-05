@@ -441,7 +441,7 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 		state.mu.Lock()
 		if !state.ready || filtered == state.lastPane {
 			state.mu.Unlock()
-			if b.flushPendingTableIfReady(ctx, key, state, 2*time.Second) {
+			if b.flushPendingTableIfReady(ctx, key, state, 5*time.Second) {
 				hasDiff = true
 			}
 			return true
@@ -505,7 +505,6 @@ func hasMarkdownTableLineBlock(blocks []string) bool {
 
 func (b *Bridge) sendBlocksWithTables(ctx context.Context, key receiverKey, state *receiverState, blocks []string) {
 	var textBlocks []string
-	hadPending := len(state.pendingTable) > 0
 
 	flushText := func() {
 		if len(textBlocks) == 0 {
@@ -557,10 +556,6 @@ func (b *Bridge) sendBlocksWithTables(ctx context.Context, key receiverKey, stat
 		textBlocks = append(textBlocks, block)
 	}
 
-	if len(state.pendingTable) > 0 && (hadPending || markdownTableDataRowCount(state.pendingTable) >= 2) {
-		flushTable()
-	}
-
 	flushText()
 }
 
@@ -609,27 +604,45 @@ func (b *Bridge) sendMarkdownBlocks(ctx context.Context, key receiverKey, state 
 			continue
 		}
 		if newContent.Len() > 0 {
-			newContent.WriteString("\n\n")
+			newContent.WriteString("\n")
 		}
 		newContent.WriteString(md)
 	}
 	if newContent.Len() == 0 {
 		return
 	}
+	incoming := compactMarkdownSpacing(newContent.String())
+	if incoming == "" {
+		return
+	}
 
+	b.sendMarkdownContent(ctx, key, state, incoming)
+}
+
+func (b *Bridge) sendMarkdownContent(ctx context.Context, key receiverKey, state *receiverState, incoming string) {
+	for _, chunk := range splitMarkdownContent(incoming, maxMarkdownLen) {
+		b.sendMarkdownChunk(ctx, key, state, chunk)
+	}
+}
+
+func (b *Bridge) sendMarkdownChunk(ctx context.Context, key receiverKey, state *receiverState, incoming string) {
 	// 追加到累积 buffer
-	if state.contentBuf.Len() > 0 {
-		state.contentBuf.WriteString("\n\n")
+	current := compactMarkdownSpacing(state.contentBuf.String())
+	separator := ""
+	if current != "" {
+		separator = "\n"
 	}
-	state.contentBuf.WriteString(newContent.String())
-
-	// 截断过长的内容（从头部截断，保留尾部最新内容）
-	content := state.contentBuf.String()
-	if len(content) > maxMarkdownLen {
-		content = truncateMarkdownContent(content, maxMarkdownLen)
+	content := compactMarkdownSpacing(current + separator + incoming)
+	if current != "" && len(content) > maxMarkdownLen {
+		state.messageID = ""
 		state.contentBuf.Reset()
-		state.contentBuf.WriteString(content)
+		content = incoming
 	}
+
+	if state.contentBuf.Len() > 0 {
+		state.contentBuf.Reset()
+	}
+	state.contentBuf.WriteString(content)
 
 	// 发送或更新
 	timeout := b.sendTimeout
@@ -647,11 +660,7 @@ func (b *Bridge) sendMarkdownBlocks(ctx context.Context, key receiverKey, state 
 			state.messageID = ""
 			state.contentBuf.Reset()
 
-			// 本次 diff 单独发送，超长则截断
-			fresh := newContent.String()
-			if len(fresh) > maxMarkdownLen {
-				fresh = fresh[:maxMarkdownLen-20] + "\n...（内容已截断）"
-			}
+			fresh := content
 			msgID, err := b.messenger.SendMarkdown(sendCtx, key.kind, key.id, fresh)
 			if err != nil {
 				log.Warnf("[bridge] send new card failed: %v", err)
@@ -768,22 +777,6 @@ func isMarkdownSeparatorLine(line string) bool {
 	return true
 }
 
-func markdownTableDataRowCount(lines []string) int {
-	count := 0
-	for i, line := range lines {
-		if i == 1 && isMarkdownSeparatorLine(line) {
-			continue
-		}
-		if i == 0 {
-			continue
-		}
-		if isMarkdownTableLine(line) {
-			count++
-		}
-	}
-	return count
-}
-
 // filterPane 过滤噪音，并将 Unicode 表格转换为 Markdown 表格
 func (b *Bridge) filterPane(pane string) string {
 	lines := strings.Split(pane, "\n")
@@ -817,6 +810,10 @@ func (b *Bridge) filterPane(pane string) string {
 
 		if b.isClaude && isClaudeToolProgressLine(line) {
 			skipClaudeToolOutput = true
+			continue
+		}
+
+		if b.isClaude && IsClaudeTUIUserPromptLine(line) {
 			continue
 		}
 
@@ -1009,17 +1006,55 @@ func formatBlockToMarkdown(block string) string {
 	return strings.TrimSpace(block)
 }
 
-// truncateMarkdownContent 从头部截断内容，保留尾部。
-// 截断位置尽量选在换行处，避免破坏代码块。
-func truncateMarkdownContent(content string, maxLen int) string {
-	if len(content) <= maxLen {
-		return content
+func compactMarkdownSpacing(content string) string {
+	lines := strings.Split(content, "\n")
+	var compact []string
+	blankSeen := false
+	for _, line := range lines {
+		line = strings.TrimRight(line, " \t")
+		if strings.TrimSpace(line) == "" {
+			if blankSeen || len(compact) == 0 {
+				continue
+			}
+			blankSeen = true
+			compact = append(compact, "")
+			continue
+		}
+		blankSeen = false
+		compact = append(compact, line)
 	}
-	cutoff := len(content) - maxLen + 50 // 留 50 字符给提示
-	if idx := strings.Index(content[cutoff:], "\n"); idx >= 0 {
-		cutoff += idx + 1
+	for len(compact) > 0 && compact[len(compact)-1] == "" {
+		compact = compact[:len(compact)-1]
 	}
-	return "...（前面内容已省略）\n\n" + content[cutoff:]
+	return strings.Join(compact, "\n")
+}
+
+func splitMarkdownContent(content string, maxLen int) []string {
+	content = compactMarkdownSpacing(content)
+	if content == "" {
+		return nil
+	}
+	if maxLen <= 0 || len(content) <= maxLen {
+		return []string{content}
+	}
+
+	var chunks []string
+	remaining := content
+	for len(remaining) > maxLen {
+		cut := strings.LastIndex(remaining[:maxLen], "\n")
+		if cut <= 0 {
+			cut = strings.LastIndex(remaining[:maxLen], " ")
+		}
+		if cut <= 0 {
+			cut = maxLen
+		}
+		chunks = append(chunks, strings.TrimSpace(remaining[:cut]))
+		remaining = strings.TrimSpace(remaining[cut:])
+	}
+	if remaining != "" {
+		chunks = append(chunks, remaining)
+	}
+	return chunks
 }
 
 func flushTable(lines []string) []string {
