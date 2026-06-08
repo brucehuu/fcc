@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"feishu-connect/internal/log"
+	"fcc/internal/log"
 
 	lark "github.com/larksuite/oapi-sdk-go/v3"
 	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"

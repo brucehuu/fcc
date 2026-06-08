@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"feishu-connect/internal/log"
+	"fcc/internal/log"
 )
 
 // Updater manages checking, downloading, and applying updates.

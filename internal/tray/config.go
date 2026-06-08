@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"feishu-connect/internal/config"
-	"feishu-connect/internal/updater"
+	"fcc/internal/config"
+	"fcc/internal/updater"
 	webview "github.com/webview/webview_go"
 )
 

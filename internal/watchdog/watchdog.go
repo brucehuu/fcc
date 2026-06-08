@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"feishu-connect/internal/log"
+	"fcc/internal/log"
 )
 
 const (

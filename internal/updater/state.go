@@ -23,12 +23,12 @@ type State struct {
 }
 
 const (
-	StatusIdle       = "idle"
-	StatusChecking   = "checking"
-	StatusUpToDate   = "uptodate"
+	StatusIdle        = "idle"
+	StatusChecking    = "checking"
+	StatusUpToDate    = "uptodate"
 	StatusDownloading = "downloading"
-	StatusDownloaded = "downloaded"
-	StatusFailed     = "failed"
+	StatusDownloaded  = "downloaded"
+	StatusFailed      = "failed"
 )
 
 func fccDir() string {

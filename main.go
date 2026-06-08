@@ -12,12 +12,12 @@ import (
 	"syscall"
 	"time"
 
-	"feishu-connect/internal/bridge"
-	"feishu-connect/internal/config"
-	"feishu-connect/internal/log"
-	"feishu-connect/internal/tray"
-	"feishu-connect/internal/updater"
-	"feishu-connect/internal/watchdog"
+	"fcc/internal/bridge"
+	"fcc/internal/config"
+	"fcc/internal/log"
+	"fcc/internal/tray"
+	"fcc/internal/updater"
+	"fcc/internal/watchdog"
 )
 
 //go:embed assets/fcc-logo.png

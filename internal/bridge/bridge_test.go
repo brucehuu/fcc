@@ -175,7 +175,7 @@ func TestFilterPaneClaudeToolOutputBlock(t *testing.T) {
 		"  ⎿  $ ls -la\n" +
 		"     M internal/bridge/bridge.go\n" +
 		"     diff --git a/internal/bridge/bridge.go b/internal/bridge/bridge.go\n" +
-		"     ok         feishu-connect/internal/bridge  (cached)\n\n" +
+		"     ok         fcc/internal/bridge  (cached)\n\n" +
 		"⏺ 这里是分析结果。"
 	want := "⏺ 这里是分析结果。"
 	if got := b.filterPane(input); got != want {
@@ -1463,7 +1463,7 @@ func TestCaptureAndSendTable(t *testing.T) {
 
 	ctx := context.Background()
 	b.captureAndSend(ctx)
-	time.Sleep(50 * time.Millisecond)
+	b.sendWg.Wait()
 
 	if len(ms.Tables()) != 0 {
 		t.Fatalf("table should be buffered before idle flush, got %v", ms.Tables())
@@ -1630,7 +1630,7 @@ func TestCaptureAndSendBuffersCodexBulletMarkdownTableHeader(t *testing.T) {
 	b.receivers.Store(key, state)
 
 	b.captureAndSend(context.Background())
-	time.Sleep(50 * time.Millisecond)
+	b.sendWg.Wait()
 
 	if len(ms.Texts()) != 0 {
 		t.Fatalf("bullet table header should not be sent as text, got %v", ms.Texts())
