@@ -393,3 +393,132 @@ func splitEnv(s string) [2]string {
 	}
 	return [2]string{s, ""}
 }
+
+func TestUpdateEnvVar(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), ".env")
+
+	// Create initial file.
+	if err := os.WriteFile(tmpFile, []byte("KEY1=old1\nKEY2=old2\n"), 0644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	// Update existing key.
+	if err := updateEnvVar(tmpFile, "KEY1", "new1"); err != nil {
+		t.Fatalf("updateEnvVar error = %v", err)
+	}
+
+	data, _ := os.ReadFile(tmpFile)
+	content := string(data)
+	if !strings.Contains(content, "KEY1=new1") {
+		t.Errorf("expected KEY1=new1 in file, got %q", content)
+	}
+	if !strings.Contains(content, "KEY2=old2") {
+		t.Errorf("expected KEY2=old2 in file, got %q", content)
+	}
+
+	// Append new key.
+	if err := updateEnvVar(tmpFile, "KEY3", "val3"); err != nil {
+		t.Fatalf("updateEnvVar error = %v", err)
+	}
+
+	data, _ = os.ReadFile(tmpFile)
+	content = string(data)
+	if !strings.Contains(content, "KEY3=val3") {
+		t.Errorf("expected KEY3=val3 in file, got %q", content)
+	}
+}
+
+func TestUpdateEnvVars(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), ".env")
+
+	if err := os.WriteFile(tmpFile, []byte("A=1\n"), 0644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	if err := updateEnvVars(tmpFile, map[string]string{
+		"A": "updated",
+		"B": "new",
+	}); err != nil {
+		t.Fatalf("updateEnvVars error = %v", err)
+	}
+
+	data, _ := os.ReadFile(tmpFile)
+	content := string(data)
+	if !strings.Contains(content, "A=updated") {
+		t.Errorf("expected A=updated, got %q", content)
+	}
+	if !strings.Contains(content, "B=new") {
+		t.Errorf("expected B=new, got %q", content)
+	}
+}
+
+func TestUpdateAppID(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), ".env")
+	if err := UpdateAppID(tmpFile, "test-id"); err != nil {
+		t.Fatalf("UpdateAppID error = %v", err)
+	}
+	data, _ := os.ReadFile(tmpFile)
+	if !strings.Contains(string(data), "LARK_APP_ID=test-id") {
+		t.Errorf("expected LARK_APP_ID=test-id, got %q", string(data))
+	}
+}
+
+func TestUpdateAppSecret(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), ".env")
+	if err := UpdateAppSecret(tmpFile, "test-secret"); err != nil {
+		t.Fatalf("UpdateAppSecret error = %v", err)
+	}
+	data, _ := os.ReadFile(tmpFile)
+	if !strings.Contains(string(data), "LARK_APP_SECRET=test-secret") {
+		t.Errorf("expected LARK_APP_SECRET=test-secret, got %q", string(data))
+	}
+}
+
+func TestUpdateCommand(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), ".env")
+	if err := UpdateCommand(tmpFile, "claude"); err != nil {
+		t.Fatalf("UpdateCommand error = %v", err)
+	}
+	data, _ := os.ReadFile(tmpFile)
+	if !strings.Contains(string(data), "COMMAND=claude") {
+		t.Errorf("expected COMMAND=claude, got %q", string(data))
+	}
+}
+
+func TestUpdateBypassPermissions(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), ".env")
+	if err := UpdateBypassPermissions(tmpFile, true); err != nil {
+		t.Fatalf("UpdateBypassPermissions error = %v", err)
+	}
+	data, _ := os.ReadFile(tmpFile)
+	if !strings.Contains(string(data), "BYPASS_PERMISSIONS=true") {
+		t.Errorf("expected BYPASS_PERMISSIONS=true, got %q", string(data))
+	}
+
+	if err := UpdateBypassPermissions(tmpFile, false); err != nil {
+		t.Fatalf("UpdateBypassPermissions error = %v", err)
+	}
+	data, _ = os.ReadFile(tmpFile)
+	if !strings.Contains(string(data), "BYPASS_PERMISSIONS=false") {
+		t.Errorf("expected BYPASS_PERMISSIONS=false, got %q", string(data))
+	}
+}
+
+func TestReload(t *testing.T) {
+	tmpFile := filepath.Join(t.TempDir(), ".env")
+	content := "LARK_APP_ID=test-id\nLARK_APP_SECRET=test-secret\nCOMMAND=claude\n"
+	if err := os.WriteFile(tmpFile, []byte(content), 0644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	cfg, err := Reload(tmpFile)
+	if err != nil {
+		t.Fatalf("Reload error = %v", err)
+	}
+	if cfg.Command != "claude" {
+		t.Errorf("Command = %q, want claude", cfg.Command)
+	}
+	if cfg.AppID != "test-id" {
+		t.Errorf("AppID = %q, want test-id", cfg.AppID)
+	}
+}

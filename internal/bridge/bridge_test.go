@@ -1675,3 +1675,243 @@ func TestCaptureAndSendMultiReceiver(t *testing.T) {
 		t.Errorf("expected 2 messages (1 per receiver), got %d", len(ms.Texts()))
 	}
 }
+
+func TestDval(t *testing.T) {
+	tests := []struct {
+		v    time.Duration
+		def  time.Duration
+		want time.Duration
+	}{
+		{1 * time.Second, 5 * time.Second, 1 * time.Second},
+		{0, 5 * time.Second, 5 * time.Second},
+		{-1 * time.Second, 5 * time.Second, 5 * time.Second},
+		{10 * time.Millisecond, 5 * time.Second, 10 * time.Millisecond},
+	}
+	for _, tt := range tests {
+		got := dval(tt.v, tt.def)
+		if got != tt.want {
+			t.Errorf("dval(%v, %v) = %v, want %v", tt.v, tt.def, got, tt.want)
+		}
+	}
+}
+
+func TestIval(t *testing.T) {
+	tests := []struct {
+		v    int
+		def  int
+		want int
+	}{
+		{5, 10, 5},
+		{0, 10, 10},
+		{-1, 10, 10},
+		{100, 10, 100},
+	}
+	for _, tt := range tests {
+		got := ival(tt.v, tt.def)
+		if got != tt.want {
+			t.Errorf("ival(%d, %d) = %d, want %d", tt.v, tt.def, got, tt.want)
+		}
+	}
+}
+
+func TestIsOpenCodeCommand(t *testing.T) {
+	tests := []struct {
+		command string
+		want    bool
+	}{
+		{"opencode", true},
+		{"/usr/local/bin/opencode", true},
+		{"npx opencode", true},
+		{"opencode --foo", true},
+		{"claude", false},
+		{"codex", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		got := isOpenCodeCommand(tt.command)
+		if got != tt.want {
+			t.Errorf("isOpenCodeCommand(%q) = %v, want %v", tt.command, got, tt.want)
+		}
+	}
+}
+
+func TestBuildCommand(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  *BridgeConfig
+		want string
+	}{
+		{
+			"claude with bypass",
+			&BridgeConfig{Command: "claude", BypassPermissions: true, CodexQueueMode: "guide"},
+			"claude --dangerously-skip-permissions",
+		},
+		{
+			"claude without bypass",
+			&BridgeConfig{Command: "claude", BypassPermissions: false, CodexQueueMode: "guide"},
+			"claude",
+		},
+		{
+			"codex with bypass and queue mode",
+			&BridgeConfig{Command: "codex", BypassPermissions: true, CodexQueueMode: "guide"},
+			`codex --dangerously-bypass-approvals-and-sandbox -c desktop.followUpQueueMode="guide"`,
+		},
+		{
+			"codex without bypass but with queue mode",
+			&BridgeConfig{Command: "codex", BypassPermissions: false, CodexQueueMode: "fast"},
+			`codex -c desktop.followUpQueueMode="fast"`,
+		},
+		{
+			"opencode no bypass param",
+			&BridgeConfig{Command: "opencode", BypassPermissions: true, CodexQueueMode: "guide"},
+			"opencode",
+		},
+		{
+			"claude bypass already present",
+			&BridgeConfig{Command: "claude --dangerously-skip-permissions", BypassPermissions: true, CodexQueueMode: "guide"},
+			"claude --dangerously-skip-permissions",
+		},
+		{
+			"codex queue mode already present",
+			&BridgeConfig{Command: `codex -c desktop.followUpQueueMode="fast"`, BypassPermissions: false, CodexQueueMode: "guide"},
+			`codex -c desktop.followUpQueueMode="fast"`,
+		},
+		{
+			"npx codex with bypass",
+			&BridgeConfig{Command: "npx -y codex", BypassPermissions: true, CodexQueueMode: "guide"},
+			`npx -y codex --dangerously-bypass-approvals-and-sandbox -c desktop.followUpQueueMode="guide"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildCommand(tt.cfg)
+			if got != tt.want {
+				t.Errorf("buildCommand() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNew(t *testing.T) {
+	cfg := &BridgeConfig{
+		AppID:                        "test-app-id",
+		AppSecret:                    "test-app-secret",
+		Command:                      "claude",
+		WorkDir:                      "",
+		BypassPermissions:            false,
+		CodexQueueMode:               "guide",
+		CaptureInterval:              100 * time.Millisecond,
+		SendTimeout:                  5 * time.Second,
+		TMUXHistoryLines:             100,
+		SendRetries:                  3,
+		NoisePatterns:                []string{"pattern"},
+		TargetName:                   "test",
+		CaptureIntervalMin:           200 * time.Millisecond,
+		CaptureIntervalMax:           30 * time.Second,
+		SendTimeoutMin:               2 * time.Second,
+		SendTimeoutMax:               60 * time.Second,
+		InterruptDebounce:            300 * time.Millisecond,
+		AdaptiveCaptureMin:           2 * time.Second,
+		AdaptiveCaptureMax:           10 * time.Second,
+		AdaptiveCaptureIdleThreshold: 5,
+		PendingTableIdleWait:         10 * time.Second,
+		PendingCodeIdleWait:          3 * time.Second,
+		MaxMarkdownLen:               5000,
+		WelcomeDelay:                 5 * time.Second,
+		WelcomeTimeout:               60 * time.Second,
+		ImageCleanupMaxAge:           14 * 24 * time.Hour,
+		ImageCleanupInterval:         12 * time.Hour,
+		CodexInputDelay:              200 * time.Millisecond,
+		BotRetryBackoff:              1 * time.Second,
+		BotRetryMaxBackoff:           10 * time.Second,
+	}
+
+	b, err := New(cfg)
+	if err != nil {
+		// tmux may not be available in test environment; that's ok.
+		t.Skipf("tmux not available: %v", err)
+	}
+	defer b.Close()
+
+	if b.captureInterval != cfg.CaptureInterval {
+		t.Errorf("captureInterval = %v, want %v", b.captureInterval, cfg.CaptureInterval)
+	}
+	if b.sendTimeout != cfg.SendTimeout {
+		t.Errorf("sendTimeout = %v, want %v", b.sendTimeout, cfg.SendTimeout)
+	}
+	if b.maxMarkdownLen != cfg.MaxMarkdownLen {
+		t.Errorf("maxMarkdownLen = %d, want %d", b.maxMarkdownLen, cfg.MaxMarkdownLen)
+	}
+	if !b.isClaude {
+		t.Error("isClaude should be true")
+	}
+	if b.targetName != cfg.TargetName {
+		t.Errorf("targetName = %q, want %q", b.targetName, cfg.TargetName)
+	}
+}
+
+func TestNewIntervalClamping(t *testing.T) {
+	cfg := &BridgeConfig{
+		AppID:              "test",
+		AppSecret:          "test",
+		Command:            "claude",
+		CaptureInterval:    1 * time.Millisecond, // below min
+		SendTimeout:        500 * time.Hour,      // above max
+		CaptureIntervalMin: 500 * time.Millisecond,
+		CaptureIntervalMax: 60 * time.Second,
+		SendTimeoutMin:     1 * time.Second,
+		SendTimeoutMax:     120 * time.Second,
+	}
+
+	b, err := New(cfg)
+	if err != nil {
+		t.Skipf("tmux not available: %v", err)
+	}
+	defer b.Close()
+
+	if b.captureInterval != cfg.CaptureIntervalMin {
+		t.Errorf("captureInterval clamped = %v, want %v", b.captureInterval, cfg.CaptureIntervalMin)
+	}
+	if b.sendTimeout != cfg.SendTimeoutMax {
+		t.Errorf("sendTimeout clamped = %v, want %v", b.sendTimeout, cfg.SendTimeoutMax)
+	}
+}
+
+func TestBridgeClose(t *testing.T) {
+	cfg := &BridgeConfig{
+		AppID:     "test",
+		AppSecret: "test",
+		Command:   "claude",
+	}
+	b, err := New(cfg)
+	if err != nil {
+		t.Skipf("tmux not available: %v", err)
+	}
+	// Close should not panic.
+	b.Close()
+	// Double close should be safe.
+	b.Close()
+}
+
+func TestBridgeLogMetrics(t *testing.T) {
+	cfg := &BridgeConfig{
+		AppID:     "test",
+		AppSecret: "test",
+		Command:   "claude",
+	}
+	b, err := New(cfg)
+	if err != nil {
+		t.Skipf("tmux not available: %v", err)
+	}
+	defer b.Close()
+
+	// Set some metrics.
+	b.metrics.messagesReceived.Add(5)
+	b.metrics.messagesSent.Add(3)
+	b.metrics.captures.Add(10)
+	b.metrics.diffHits.Add(7)
+	b.metrics.diffMisses.Add(2)
+
+	// Should not panic.
+	b.LogMetrics()
+}
