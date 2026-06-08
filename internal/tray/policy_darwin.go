@@ -54,6 +54,60 @@ static void hideMinimizeAndZoomButtons(void *windowPtr) {
 		[zoomButton setHidden:YES];
 	}
 }
+
+// setupEditMenu 为当前 NSApplication 添加 Edit 菜单，使 webview 中的
+// 文本框支持 Cmd+C / Cmd+X / Cmd+V / Cmd+A / Cmd+Z / Cmd+Shift+Z 等快捷键。
+static void setupEditMenu(void) {
+	NSApplication *app = [NSApplication sharedApplication];
+	NSMenu *mainMenu = [app mainMenu];
+	if (mainMenu == nil) {
+		mainMenu = [[NSMenu alloc] initWithTitle:@""];
+		[app setMainMenu:mainMenu];
+	}
+
+	NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
+
+	NSMenuItem *undoItem = [[NSMenuItem alloc] initWithTitle:@"Undo"
+		action:@selector(undo:) keyEquivalent:@"z"];
+	[editMenu addItem:undoItem];
+
+	NSMenuItem *redoItem = [[NSMenuItem alloc] initWithTitle:@"Redo"
+		action:@selector(redo:) keyEquivalent:@"Z"];
+	[editMenu addItem:redoItem];
+
+	[editMenu addItem:[NSMenuItem separatorItem]];
+
+	NSMenuItem *cutItem = [[NSMenuItem alloc] initWithTitle:@"Cut"
+		action:@selector(cut:) keyEquivalent:@"x"];
+	[editMenu addItem:cutItem];
+
+	NSMenuItem *copyItem = [[NSMenuItem alloc] initWithTitle:@"Copy"
+		action:@selector(copy:) keyEquivalent:@"c"];
+	[editMenu addItem:copyItem];
+
+	NSMenuItem *pasteItem = [[NSMenuItem alloc] initWithTitle:@"Paste"
+		action:@selector(paste:) keyEquivalent:@"v"];
+	[editMenu addItem:pasteItem];
+
+	[editMenu addItem:[NSMenuItem separatorItem]];
+
+	NSMenuItem *selectAllItem = [[NSMenuItem alloc] initWithTitle:@"Select All"
+		action:@selector(selectAll:) keyEquivalent:@"a"];
+	[editMenu addItem:selectAllItem];
+
+	NSMenuItem *editMenuItem = [[NSMenuItem alloc] initWithTitle:@"Edit"
+		action:nil keyEquivalent:@""];
+	[editMenuItem setSubmenu:editMenu];
+
+	// 避免重复添加
+	for (NSMenuItem *item in [mainMenu itemArray]) {
+		if ([item hasSubmenu] && [[[item submenu] title] isEqualToString:@"Edit"]) {
+			[mainMenu removeItem:item];
+			break;
+		}
+	}
+	[mainMenu addItem:editMenuItem];
+}
 */
 import "C"
 
@@ -94,4 +148,10 @@ func SetFinderIcon(filePath string, pngBytes []byte) error {
 // HideMinimizeAndZoomButtons 隐藏窗口的最小化和最大化按钮，只保留关闭按钮。
 func HideMinimizeAndZoomButtons(window unsafe.Pointer) {
 	C.hideMinimizeAndZoomButtons(window)
+}
+
+// SetupEditMenu 为当前 NSApplication 添加 Edit 菜单，使 webview 中的
+// 文本框支持系统原生快捷键（Copy/Cut/Paste/Select All/Undo/Redo）。
+func SetupEditMenu() {
+	C.setupEditMenu()
 }

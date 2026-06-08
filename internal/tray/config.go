@@ -104,6 +104,7 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 	w.SetSize(configWidth, configHeight, webview.HintFixed)
 	HideMinimizeAndZoomButtons(w.Window())
 	w.SetHtml(configHTML())
+	SetupEditMenu()
 
 	w.Bind("loadConfig", func() map[string]interface{} {
 		cfg, err := config.Load(".env")
@@ -166,14 +167,6 @@ func RunConfigWindow(iconPNG []byte, firstRun bool, version string) {
 			return map[string]interface{}{"success": false, "error": "restart: " + err.Error()}
 		}
 		return map[string]interface{}{"success": true}
-	})
-
-	w.Bind("readClipboard", func() string {
-		out, err := exec.Command("pbpaste").Output()
-		if err != nil {
-			return ""
-		}
-		return string(out)
 	})
 
 	w.Bind("saveAiToolConfig", func(tool, command string, bypass bool) map[string]interface{} {
@@ -449,6 +442,7 @@ func configHTML() string {
       margin-top: 8px;
     }
     button:hover { background: #0051d5; }
+    button:active { transform: scale(0.98); opacity: 0.9; }
     button:disabled { background: #ccc; cursor: not-allowed; }
     .checkbox-wrap {
       display: flex;
@@ -497,6 +491,34 @@ func configHTML() string {
     .update-actions button {
       flex: 1;
       margin-top: 0;
+    }
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.4);
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal-box {
+      background: #fff;
+      border-radius: 10px;
+      padding: 24px 28px;
+      min-width: 260px;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+    }
+    .modal-box p {
+      margin: 0 0 18px;
+      font-size: 15px;
+      color: #333;
+    }
+    .modal-box button {
+      margin-top: 0;
+      padding: 8px 28px;
+      border-radius: 6px;
     }
   </style>
 </head>
@@ -577,41 +599,20 @@ func configHTML() string {
   <script>
     const $ = id => document.getElementById(id);
 
-    document.addEventListener('keydown', async function(e) {
+    document.addEventListener('keydown', function(e) {
       const key = (e.key || '').toLowerCase();
-      if ((e.metaKey || e.ctrlKey) && key === 'v') {
-        const target = document.activeElement;
-        if (isPasteTarget(target)) {
-          e.preventDefault();
-          const text = await window.readClipboard();
-          insertTextAtCursor(target, text || '');
-        }
-        return;
-      }
       if (e.metaKey && key === 'w') {
         e.preventDefault();
         window.closeWindow();
       }
     });
 
-    function isPasteTarget(el) {
-      if (!el || el.disabled || el.readOnly) return false;
-      const tag = (el.tagName || '').toUpperCase();
-      if (tag === 'TEXTAREA') return true;
-      if (tag !== 'INPUT') return false;
-      return ['text', 'password', 'search', 'url', 'email', 'tel', ''].includes((el.type || '').toLowerCase());
+    function showModal(text) {
+      $('modalText').textContent = text;
+      $('modalOverlay').classList.add('show');
     }
-
-    function insertTextAtCursor(el, text) {
-      const start = el.selectionStart ?? el.value.length;
-      const end = el.selectionEnd ?? el.value.length;
-      el.value = el.value.slice(0, start) + text + el.value.slice(end);
-      const pos = start + text.length;
-      if (typeof el.setSelectionRange === 'function') {
-        el.setSelectionRange(pos, pos);
-      }
-      el.dispatchEvent(new Event('input', {bubbles: true}));
-      el.dispatchEvent(new Event('change', {bubbles: true}));
+    function hideModal() {
+      $('modalOverlay').classList.remove('show');
     }
 
     function setStatus(text, isError) {
@@ -836,8 +837,9 @@ func configHTML() string {
         const targetName = $('targetName').value.trim();
         const res = await window.testMessage(appID, appSecret, targetName);
         if (res.success) {
-          testStatusEl.textContent = res.message || 'Message sent successfully!';
-          testStatusEl.className = 'success';
+          showModal('发送成功');
+          testStatusEl.textContent = '';
+          testStatusEl.className = '';
         } else {
           testStatusEl.textContent = 'Failed: ' + (res.error || 'unknown');
           testStatusEl.className = 'error';
@@ -861,6 +863,13 @@ func configHTML() string {
     $('bypass').addEventListener('change', saveAiTool);
     load();
   </script>
+
+  <div class="modal-overlay" id="modalOverlay">
+    <div class="modal-box">
+      <p id="modalText"></p>
+      <button onclick="hideModal()">确定</button>
+    </div>
+  </div>
 </body>
 </html>`
 }
