@@ -21,13 +21,15 @@ import (
 )
 
 type Bot struct {
-	client     *lark.Client
-	wsClient   *larkws.Client
-	botOpenID  string
-	botIDMu    sync.RWMutex
-	onMessage  func(chatType, openID, chatID, text string)
-	maxRetries int
-	closeOnce  sync.Once
+	client          *lark.Client
+	wsClient        *larkws.Client
+	botOpenID       string
+	botIDMu         sync.RWMutex
+	onMessage       func(chatType, openID, chatID, text string)
+	maxRetries      int
+	retryBackoff    time.Duration
+	retryMaxBackoff time.Duration
+	closeOnce       sync.Once
 }
 
 type TextContent struct {
@@ -66,13 +68,22 @@ type botInfoResp struct {
 	} `json:"data"`
 }
 
-func New(appID, appSecret string, onMessage func(chatType, openID, chatID, text string), maxRetries int) *Bot {
+func New(appID, appSecret string, onMessage func(chatType, openID, chatID, text string), maxRetries int, retryBackoff, retryMaxBackoff time.Duration) *Bot {
 	client := lark.NewClient(appID, appSecret)
 
+	if retryBackoff <= 0 {
+		retryBackoff = 500 * time.Millisecond
+	}
+	if retryMaxBackoff <= 0 {
+		retryMaxBackoff = 30 * time.Second
+	}
+
 	b := &Bot{
-		client:     client,
-		onMessage:  onMessage,
-		maxRetries: maxRetries,
+		client:          client,
+		onMessage:       onMessage,
+		maxRetries:      maxRetries,
+		retryBackoff:    retryBackoff,
+		retryMaxBackoff: retryMaxBackoff,
 	}
 
 	d := dispatcher.NewEventDispatcher("", "").
@@ -401,7 +412,7 @@ func (b *Bot) UpdateMessage(ctx context.Context, messageID, text string) error {
 // sendWithRetry 带指数退避的重试包装器
 func (b *Bot) sendWithRetry(ctx context.Context, label string, fn func(ctx context.Context) error) error {
 	var lastErr error
-	backoff := 500 * time.Millisecond
+	backoff := b.retryBackoff
 
 	for attempt := 0; attempt < b.maxRetries; attempt++ {
 		if ctx.Err() != nil {
@@ -424,8 +435,8 @@ func (b *Bot) sendWithRetry(ctx context.Context, label string, fn func(ctx conte
 			case <-time.After(backoff):
 			}
 			backoff *= 2
-			if backoff > 30*time.Second {
-				backoff = 30 * time.Second
+			if backoff > b.retryMaxBackoff {
+				backoff = b.retryMaxBackoff
 			}
 		}
 	}

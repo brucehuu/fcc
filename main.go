@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"fcc/internal/bridge"
 	"fcc/internal/config"
@@ -147,19 +146,40 @@ func main() {
 		log.Infof("[main] working directory: %s", workDir)
 	}
 
+	// 设置 watchdog 检查间隔
+	watchdog.SetCheckInterval(cfg.WatchdogCheckInterval)
+
 	b, err := bridge.New(&bridge.BridgeConfig{
-		AppID:             cfg.AppID,
-		AppSecret:         cfg.AppSecret,
-		Command:           cfg.Command,
-		WorkDir:           workDir,
-		BypassPermissions: cfg.BypassPermissions,
-		CodexQueueMode:    cfg.CodexQueueMode,
-		CaptureInterval:   cfg.CaptureInterval,
-		SendTimeout:       cfg.SendTimeout,
-		TMUXHistoryLines:  cfg.TMUXHistoryLines,
-		SendRetries:       cfg.SendRetries,
-		NoisePatterns:     cfg.NoisePatterns,
-		TargetName:        cfg.TargetName,
+		AppID:                        cfg.AppID,
+		AppSecret:                    cfg.AppSecret,
+		Command:                      cfg.Command,
+		WorkDir:                      workDir,
+		BypassPermissions:            cfg.BypassPermissions,
+		CodexQueueMode:               cfg.CodexQueueMode,
+		CaptureInterval:              cfg.CaptureInterval,
+		SendTimeout:                  cfg.SendTimeout,
+		TMUXHistoryLines:             cfg.TMUXHistoryLines,
+		SendRetries:                  cfg.SendRetries,
+		NoisePatterns:                cfg.NoisePatterns,
+		TargetName:                   cfg.TargetName,
+		CaptureIntervalMin:           cfg.CaptureIntervalMin,
+		CaptureIntervalMax:           cfg.CaptureIntervalMax,
+		SendTimeoutMin:               cfg.SendTimeoutMin,
+		SendTimeoutMax:               cfg.SendTimeoutMax,
+		InterruptDebounce:            cfg.InterruptDebounce,
+		AdaptiveCaptureMin:           cfg.AdaptiveCaptureMin,
+		AdaptiveCaptureMax:           cfg.AdaptiveCaptureMax,
+		AdaptiveCaptureIdleThreshold: cfg.AdaptiveCaptureIdleThreshold,
+		PendingTableIdleWait:         cfg.PendingTableIdleWait,
+		PendingCodeIdleWait:          cfg.PendingCodeIdleWait,
+		MaxMarkdownLen:               cfg.MaxMarkdownLen,
+		WelcomeDelay:                 cfg.WelcomeDelay,
+		WelcomeTimeout:               cfg.WelcomeTimeout,
+		ImageCleanupMaxAge:           cfg.ImageCleanupMaxAge,
+		ImageCleanupInterval:         cfg.ImageCleanupInterval,
+		CodexInputDelay:              cfg.CodexInputDelay,
+		BotRetryBackoff:              cfg.BotRetryBackoff,
+		BotRetryMaxBackoff:           cfg.BotRetryMaxBackoff,
 	})
 	if err != nil {
 		log.Errorf("failed to create bridge: %v", err)
@@ -172,7 +192,8 @@ func main() {
 	defer cancel()
 
 	// 启动后台更新检查器
-	up := updater.New(version)
+	up := updater.New(version, cfg.UpdaterFirstCheckDelay, cfg.UpdaterCheckInterval,
+		cfg.UpdaterHTTPTimeout, cfg.DownloadHTTPTimeout, cfg.GithubAPITimeout, cfg.ImageCleanupMaxAge)
 	go up.Start(ctx)
 
 	// 信号触发：发信号时调 tray.Stop() 让 NSApp 走 terminate 流程，
@@ -275,7 +296,7 @@ func main() {
 	b.Close()
 	b.LogMetrics()
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer shutdownCancel()
 	if err := b.Shutdown(shutdownCtx); err != nil {
 		log.Warnf("[main] shutdown incomplete: %v", err)

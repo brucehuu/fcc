@@ -1225,8 +1225,9 @@ func TestFlushPendingCodeIfReady(t *testing.T) {
 func TestSendMarkdownBlocksUsesTightSpacing(t *testing.T) {
 	ms := &mockMessenger{}
 	b := &Bridge{
-		messenger:   ms,
-		sendTimeout: 10 * time.Second,
+		messenger:      ms,
+		sendTimeout:    10 * time.Second,
+		maxMarkdownLen: 3000,
 	}
 	key := receiverKey{id: "user1", kind: "open_id"}
 	state := &receiverState{}
@@ -1249,15 +1250,16 @@ func TestSendMarkdownBlocksUsesTightSpacing(t *testing.T) {
 func TestSendMarkdownContentOpensNewCardWhenFull(t *testing.T) {
 	ms := &mockMessenger{}
 	b := &Bridge{
-		messenger:   ms,
-		sendTimeout: 10 * time.Second,
+		messenger:      ms,
+		sendTimeout:    10 * time.Second,
+		maxMarkdownLen: 3000,
 	}
 	key := receiverKey{id: "user1", kind: "open_id"}
 	state := &receiverState{}
 	b.receivers.Store(key, state)
 
 	ctx := context.Background()
-	nearLimit := strings.Repeat("a", maxMarkdownLen-10)
+	nearLimit := strings.Repeat("a", b.maxMarkdownLen-10)
 	b.sendMarkdownContent(ctx, key, state, nearLimit)
 	b.sendMarkdownContent(ctx, key, state, "second card content")
 

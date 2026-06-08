@@ -11,11 +11,18 @@ import (
 	"fcc/internal/log"
 )
 
-const (
+var (
 	watchdogPidFile = "/tmp/fcc-watchdog.pid"
 	fccPidFile      = "/tmp/fcc.pid"
 	checkInterval   = 6 * time.Second
 )
+
+// SetCheckInterval 允许外部调整检查间隔（如从配置读取）。
+func SetCheckInterval(d time.Duration) {
+	if d > 0 {
+		checkInterval = d
+	}
+}
 
 // ForkIfNeeded 检查是否已有 watchdog 在运行，没有则 fork 一个。
 // 在正常 fcc 模式启动时调用。

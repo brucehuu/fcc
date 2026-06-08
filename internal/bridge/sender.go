@@ -231,7 +231,7 @@ func (b *Bridge) appendMarkdownBlock(ctx context.Context, key receiverKey, state
 }
 
 func (b *Bridge) sendMarkdownContent(ctx context.Context, key receiverKey, state *receiverState, incoming string) {
-	for _, chunk := range splitMarkdownContent(incoming, maxMarkdownLen) {
+	for _, chunk := range splitMarkdownContent(incoming, b.maxMarkdownLen) {
 		b.sendMarkdownChunk(ctx, key, state, chunk)
 	}
 }
@@ -244,7 +244,7 @@ func (b *Bridge) sendMarkdownChunk(ctx context.Context, key receiverKey, state *
 		separator = "\n"
 	}
 	content := compactMarkdownSpacing(current + separator + incoming)
-	if current != "" && len(content) > maxMarkdownLen {
+	if current != "" && b.maxMarkdownLen > 0 && len(content) > b.maxMarkdownLen {
 		state.messageID = ""
 		state.contentBuf.Reset()
 		content = incoming

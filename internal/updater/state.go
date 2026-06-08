@@ -72,12 +72,12 @@ func SaveState(s *State) error {
 	return os.WriteFile(statePath(), data, 0644)
 }
 
-// ShouldCheck returns true if the last check was more than 24 hours ago.
-func ShouldCheck(s *State) bool {
+// ShouldCheck returns true if the last check was more than cooldown ago.
+func ShouldCheck(s *State, cooldown time.Duration) bool {
 	if s.CheckedAt.IsZero() {
 		return true
 	}
-	return time.Since(s.CheckedAt) > 24*time.Hour
+	return time.Since(s.CheckedAt) > cooldown
 }
 
 // DownloadDir returns the directory for downloaded update binaries.

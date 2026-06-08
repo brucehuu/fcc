@@ -27,6 +27,28 @@ type BridgeConfig struct {
 	SendRetries       int
 	NoisePatterns     []string
 	TargetName        string // 首次启动时发送欢迎消息的目标用户名称
+
+	// 调优参数（全部可选，传零值则使用内部默认值）
+	CaptureIntervalMin           time.Duration
+	CaptureIntervalMax           time.Duration
+	SendTimeoutMin               time.Duration
+	SendTimeoutMax               time.Duration
+	InterruptDebounce            time.Duration
+	AdaptiveCaptureMin           time.Duration
+	AdaptiveCaptureMax           time.Duration
+	AdaptiveCaptureIdleThreshold int
+	PendingTableIdleWait         time.Duration
+	PendingCodeIdleWait          time.Duration
+	MaxMarkdownLen               int
+	WelcomeDelay                 time.Duration
+	WelcomeTimeout               time.Duration
+	ImageCleanupMaxAge           time.Duration
+	ImageCleanupInterval         time.Duration
+	CodexInputDelay              time.Duration
+
+	// Bot 重试退避
+	BotRetryBackoff    time.Duration
+	BotRetryMaxBackoff time.Duration
 }
 
 type Bridge struct {
@@ -51,6 +73,23 @@ type Bridge struct {
 
 	lastUserMessage string     // 最近从飞书收到的用户消息，用于过滤 tmux 回显
 	lastUserMsgMu   sync.Mutex // 保护 lastUserMessage
+
+	// 调优参数（从 BridgeConfig 传入）
+	captureIntervalMin           time.Duration
+	captureIntervalMax           time.Duration
+	sendTimeoutMin               time.Duration
+	sendTimeoutMax               time.Duration
+	adaptiveCaptureMin           time.Duration
+	adaptiveCaptureMax           time.Duration
+	adaptiveCaptureIdleThreshold int
+	pendingTableIdleWait         time.Duration
+	pendingCodeIdleWait          time.Duration
+	maxMarkdownLen               int
+	welcomeDelay                 time.Duration
+	welcomeTimeout               time.Duration
+	imageCleanupMaxAge           time.Duration
+	imageCleanupInterval         time.Duration
+	codexInputDelay              time.Duration
 }
 
 // buildCommand 根据配置构建完整的启动命令（追加 bypass 参数、codex queue mode 等）。
@@ -77,33 +116,52 @@ func buildCommand(cfg *BridgeConfig) string {
 func New(cfg *BridgeConfig) (*Bridge, error) {
 	command := buildCommand(cfg)
 
+	captureIntervalMin := dval(cfg.CaptureIntervalMin, 500*time.Millisecond)
+	captureIntervalMax := dval(cfg.CaptureIntervalMax, 60*time.Second)
 	captureInterval := cfg.CaptureInterval
-	if captureInterval < 500*time.Millisecond {
-		captureInterval = 500 * time.Millisecond
+	if captureInterval < captureIntervalMin {
+		captureInterval = captureIntervalMin
 	}
-	if captureInterval > 60*time.Second {
-		captureInterval = 60 * time.Second
+	if captureInterval > captureIntervalMax {
+		captureInterval = captureIntervalMax
 	}
 
+	sendTimeoutMin := dval(cfg.SendTimeoutMin, 1*time.Second)
+	sendTimeoutMax := dval(cfg.SendTimeoutMax, 120*time.Second)
 	sendTimeout := cfg.SendTimeout
-	if sendTimeout < 1*time.Second {
-		sendTimeout = 1 * time.Second
+	if sendTimeout < sendTimeoutMin {
+		sendTimeout = sendTimeoutMin
 	}
-	if sendTimeout > 120*time.Second {
-		sendTimeout = 120 * time.Second
+	if sendTimeout > sendTimeoutMax {
+		sendTimeout = sendTimeoutMax
 	}
 
 	b := &Bridge{
-		captureInterval:   captureInterval,
-		sendTimeout:       sendTimeout,
-		historyLines:      cfg.TMUXHistoryLines,
-		interruptDebounce: 500 * time.Millisecond,
-		noisePatterns:     cfg.NoisePatterns,
-		isClaude:          isClaudeCommand(command),
-		isCodex:           isCodexCommand(command),
-		targetName:        cfg.TargetName,
+		captureInterval:              captureInterval,
+		sendTimeout:                  sendTimeout,
+		historyLines:                 cfg.TMUXHistoryLines,
+		interruptDebounce:            dval(cfg.InterruptDebounce, 500*time.Millisecond),
+		noisePatterns:                cfg.NoisePatterns,
+		isClaude:                     isClaudeCommand(command),
+		isCodex:                      isCodexCommand(command),
+		targetName:                   cfg.TargetName,
+		captureIntervalMin:           captureIntervalMin,
+		captureIntervalMax:           captureIntervalMax,
+		sendTimeoutMin:               sendTimeoutMin,
+		sendTimeoutMax:               sendTimeoutMax,
+		adaptiveCaptureMin:           dval(cfg.AdaptiveCaptureMin, 1*time.Second),
+		adaptiveCaptureMax:           dval(cfg.AdaptiveCaptureMax, 5*time.Second),
+		adaptiveCaptureIdleThreshold: ival(cfg.AdaptiveCaptureIdleThreshold, 3),
+		pendingTableIdleWait:         dval(cfg.PendingTableIdleWait, 12*time.Second),
+		pendingCodeIdleWait:          dval(cfg.PendingCodeIdleWait, 5*time.Second),
+		maxMarkdownLen:               ival(cfg.MaxMarkdownLen, 3000),
+		welcomeDelay:                 dval(cfg.WelcomeDelay, 3*time.Second),
+		welcomeTimeout:               dval(cfg.WelcomeTimeout, 30*time.Second),
+		imageCleanupMaxAge:           dval(cfg.ImageCleanupMaxAge, 7*24*time.Hour),
+		imageCleanupInterval:         dval(cfg.ImageCleanupInterval, 24*time.Hour),
+		codexInputDelay:              dval(cfg.CodexInputDelay, 150*time.Millisecond),
 	}
-	b.messenger = bot.New(cfg.AppID, cfg.AppSecret, b.handleMessage, cfg.SendRetries)
+	b.messenger = bot.New(cfg.AppID, cfg.AppSecret, b.handleMessage, cfg.SendRetries, cfg.BotRetryBackoff, cfg.BotRetryMaxBackoff)
 
 	tm := terminal.NewTmuxSession("fcc")
 	if !tm.IsAvailable() {
@@ -117,6 +175,22 @@ func New(cfg *BridgeConfig) (*Bridge, error) {
 	b.term = tm
 
 	return b, nil
+}
+
+// dval returns v if positive, otherwise def.
+func dval(v, def time.Duration) time.Duration {
+	if v > 0 {
+		return v
+	}
+	return def
+}
+
+// ival returns v if positive, otherwise def.
+func ival(v, def int) int {
+	if v > 0 {
+		return v
+	}
+	return def
 }
 
 func isClaudeCommand(command string) bool {
@@ -256,7 +330,7 @@ func (b *Bridge) sendUserInputToTerminal(term Terminal, text string) error {
 	if err := term.SendLiteral(text); err != nil {
 		return err
 	}
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(b.codexInputDelay)
 	return term.SendSpecialKey("C-m")
 }
 
@@ -283,10 +357,10 @@ func (b *Bridge) Start(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(3 * time.Second):
+		case <-time.After(b.welcomeDelay):
 		}
 		if b.targetName != "" {
-			welcomeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			welcomeCtx, cancel := context.WithTimeout(ctx, b.welcomeTimeout)
 			if err := b.messenger.SendWelcome(welcomeCtx, b.targetName, "FCC is coming..."); err != nil {
 				log.Warnf("[bridge] send welcome: %v", err)
 			}
@@ -299,17 +373,17 @@ func (b *Bridge) Start(ctx context.Context) error {
 }
 
 func (b *Bridge) runImageCleanup(ctx context.Context) {
-	if err := b.CleanupOldImages(7 * 24 * time.Hour); err != nil {
+	if err := b.CleanupOldImages(b.imageCleanupMaxAge); err != nil {
 		log.Warnf("[bridge] image cleanup failed: %v", err)
 	}
-	ticker := time.NewTicker(24 * time.Hour)
+	ticker := time.NewTicker(b.imageCleanupInterval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = b.CleanupOldImages(7 * 24 * time.Hour)
+			_ = b.CleanupOldImages(b.imageCleanupMaxAge)
 		}
 	}
 }
@@ -362,11 +436,9 @@ func (b *Bridge) forwardOutput(ctx context.Context) {
 	}
 
 	// 自适应捕获间隔：有 diff 时缩短，无 diff 时延长
-	const (
-		minInterval        = 1 * time.Second
-		maxInterval        = 5 * time.Second
-		maxConsecutiveIdle = 3
-	)
+	minInterval := b.adaptiveCaptureMin
+	maxInterval := b.adaptiveCaptureMax
+	maxConsecutiveIdle := b.adaptiveCaptureIdleThreshold
 	interval := b.captureInterval
 	if interval < minInterval {
 		interval = minInterval
@@ -422,7 +494,7 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 		state.mu.Lock()
 		if !state.ready || filtered == state.lastPane {
 			state.mu.Unlock()
-			if b.flushPendingTableIfReady(ctx, key, state, pendingTableIdleWait) || b.flushPendingCodeIfReady(ctx, key, state, 5*time.Second) {
+			if b.flushPendingTableIfReady(ctx, key, state, b.pendingTableIdleWait) || b.flushPendingCodeIfReady(ctx, key, state, b.pendingCodeIdleWait) {
 				hasDiff = true
 			}
 			return true
@@ -457,9 +529,7 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 }
 
 const (
-	maxMarkdownLen       = 3000 // interactive 卡片 JSON 有长度限制，内容留余量
-	pendingTableIdleWait = 12 * time.Second
-	markdownCardBreak    = "\f"
+	markdownCardBreak = "\f"
 )
 
 func (b *Bridge) Close() {

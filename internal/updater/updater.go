@@ -16,25 +16,56 @@ import (
 
 // Updater manages checking, downloading, and applying updates.
 type Updater struct {
-	currentVersion string
-	httpClient     *http.Client
-	state          *State
-	mu             sync.RWMutex
+	currentVersion      string
+	httpClient          *http.Client
+	state               *State
+	mu                  sync.RWMutex
+	firstCheckDelay     time.Duration
+	checkInterval       time.Duration
+	httpTimeout         time.Duration
+	downloadHTTPTimeout time.Duration
+	githubAPITimeout    time.Duration
+	stateCheckCooldown  time.Duration
 }
 
 // New creates an updater for the given current version.
-func New(currentVersion string) *Updater {
+// All durations are optional; zero values fall back to sensible defaults.
+func New(currentVersion string, firstCheckDelay, checkInterval, httpTimeout, downloadHTTPTimeout, githubAPITimeout, stateCheckCooldown time.Duration) *Updater {
+	if httpTimeout <= 0 {
+		httpTimeout = 30 * time.Second
+	}
+	if firstCheckDelay <= 0 {
+		firstCheckDelay = 30 * time.Second
+	}
+	if checkInterval <= 0 {
+		checkInterval = 24 * time.Hour
+	}
+	if downloadHTTPTimeout <= 0 {
+		downloadHTTPTimeout = 120 * time.Second
+	}
+	if githubAPITimeout <= 0 {
+		githubAPITimeout = 15 * time.Second
+	}
+	if stateCheckCooldown <= 0 {
+		stateCheckCooldown = 24 * time.Hour
+	}
 	return &Updater{
-		currentVersion: currentVersion,
-		httpClient:     &http.Client{Timeout: 30 * time.Second},
+		currentVersion:      currentVersion,
+		httpClient:          &http.Client{Timeout: httpTimeout},
+		firstCheckDelay:     firstCheckDelay,
+		checkInterval:       checkInterval,
+		httpTimeout:         httpTimeout,
+		downloadHTTPTimeout: downloadHTTPTimeout,
+		githubAPITimeout:    githubAPITimeout,
+		stateCheckCooldown:  stateCheckCooldown,
 	}
 }
 
 // Start runs the background check loop.
-// It checks once at startup (delayed) and then every 24 hours.
+// It checks once at startup (delayed) and then every configured interval.
 func (u *Updater) Start(ctx context.Context) {
 	// Delay first check to avoid interfering with startup.
-	time.Sleep(30 * time.Second)
+	time.Sleep(u.firstCheckDelay)
 
 	for {
 		u.checkAndDownload(ctx)
@@ -42,7 +73,7 @@ func (u *Updater) Start(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(24 * time.Hour):
+		case <-time.After(u.checkInterval):
 		}
 	}
 }
@@ -53,11 +84,11 @@ func (u *Updater) checkAndDownload(ctx context.Context) {
 	if state == nil {
 		state = &State{CurrentVersion: u.currentVersion, Status: StatusIdle}
 	}
-	if !ShouldCheck(state) {
-		log.Info("[updater] check skipped, last check within 24h")
+	if !ShouldCheck(state, u.stateCheckCooldown) {
+		log.Info("[updater] check skipped, last check within cooldown")
 		return
 	}
-	result := CheckNow(u.currentVersion)
+	result := u.checkNow()
 	u.mu.Lock()
 	u.state = result
 	u.mu.Unlock()
@@ -65,19 +96,27 @@ func (u *Updater) checkAndDownload(ctx context.Context) {
 
 // CheckNow performs an immediate version check and download.
 // It can be called from the config window helper or background loop.
+// Uses default timeouts (no custom configuration).
 func CheckNow(currentVersion string) *State {
+	u := New(currentVersion, 0, 0, 0, 0, 0, 0)
+	return u.checkNow()
+}
+
+// checkNow performs an immediate version check and download.
+func (u *Updater) checkNow() *State {
 	state, err := LoadState()
 	if err != nil {
-		state = &State{CurrentVersion: currentVersion, Status: StatusIdle}
+		state = &State{CurrentVersion: u.currentVersion, Status: StatusIdle}
 	}
-	state.CurrentVersion = currentVersion
+	state.CurrentVersion = u.currentVersion
 
 	state.Status = StatusChecking
 	state.CheckedAt = time.Now()
 	_ = SaveState(state)
 
 	log.Info("[updater] checking for updates...")
-	rel, err := FetchLatest(nil)
+	githubClient := &http.Client{Timeout: u.githubAPITimeout}
+	rel, err := FetchLatest(githubClient)
 	if err != nil {
 		log.Warnf("[updater] fetch latest: %v", err)
 		state.Status = StatusFailed
@@ -89,14 +128,14 @@ func CheckNow(currentVersion string) *State {
 	latest := ParseVersion(rel.TagName)
 	state.LatestVersion = latest
 
-	if !CompareVersions(currentVersion, latest) {
-		log.Infof("[updater] up to date (current=%s, latest=%s)", currentVersion, latest)
+	if !CompareVersions(u.currentVersion, latest) {
+		log.Infof("[updater] up to date (current=%s, latest=%s)", u.currentVersion, latest)
 		state.Status = StatusUpToDate
 		_ = SaveState(state)
 		return state
 	}
 
-	log.Infof("[updater] new version available: %s (current=%s)", latest, currentVersion)
+	log.Infof("[updater] new version available: %s (current=%s)", latest, u.currentVersion)
 
 	// Check if we already have this version downloaded.
 	if state.Status == StatusDownloaded && state.LatestVersion == latest {
@@ -119,7 +158,8 @@ func CheckNow(currentVersion string) *State {
 	state.Status = StatusDownloading
 	_ = SaveState(state)
 
-	binaryPath, checksum, err := Download(nil, binaryURL, shaURL, latest)
+	downloadClient := &http.Client{Timeout: u.downloadHTTPTimeout}
+	binaryPath, checksum, err := Download(downloadClient, binaryURL, shaURL, latest)
 	if err != nil {
 		log.Warnf("[updater] download failed: %v", err)
 		state.Status = StatusFailed

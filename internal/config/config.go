@@ -24,6 +24,41 @@ type Config struct {
 	TMUXHistoryLines  int           // tmux 历史缓冲区行数
 	LogLevel          string        // "debug" | "info" | "warn" | "error"
 	NoisePatterns     []string      // 噪音过滤关键词列表
+
+	// Bridge 行为调优（全部可选，带默认值）
+	CaptureIntervalMin           time.Duration // 默认 500ms
+	CaptureIntervalMax           time.Duration // 默认 60s
+	SendTimeoutMin               time.Duration // 默认 1s
+	SendTimeoutMax               time.Duration // 默认 120s
+	InterruptDebounce            time.Duration // 默认 500ms
+	AdaptiveCaptureMin           time.Duration // 默认 1s
+	AdaptiveCaptureMax           time.Duration // 默认 5s
+	AdaptiveCaptureIdleThreshold int           // 默认 3
+	PendingTableIdleWait         time.Duration // 默认 12s
+	PendingCodeIdleWait          time.Duration // 默认 5s
+	MaxMarkdownLen               int           // 默认 3000
+	WelcomeDelay                 time.Duration // 默认 3s
+	WelcomeTimeout               time.Duration // 默认 30s
+	ImageCleanupMaxAge           time.Duration // 默认 7*24h
+	ImageCleanupInterval         time.Duration // 默认 24h
+	CodexInputDelay              time.Duration // 默认 150ms
+
+	// Bot 重试调优
+	BotRetryBackoff    time.Duration // 默认 500ms
+	BotRetryMaxBackoff time.Duration // 默认 30s
+
+	// Watchdog
+	WatchdogCheckInterval time.Duration // 默认 6s
+
+	// Updater
+	UpdaterFirstCheckDelay time.Duration // 默认 30s
+	UpdaterCheckInterval   time.Duration // 默认 24h
+	UpdaterHTTPTimeout     time.Duration // 默认 30s
+	DownloadHTTPTimeout    time.Duration // 默认 120s
+	GithubAPITimeout       time.Duration // 默认 15s
+
+	// Main
+	ShutdownTimeout time.Duration // 默认 5s
 }
 
 func Load(path string) (*Config, error) {
@@ -114,6 +149,41 @@ func parseEnv() (*Config, error) {
 		TMUXHistoryLines:  parseInt(tmuxHistory, 2000),
 		LogLevel:          logLevel,
 		NoisePatterns:     noisePatternsList,
+
+		// Bridge 调优（全部从环境变量读取，空则使用默认值）
+		CaptureIntervalMin:           parseDuration(os.Getenv("CAPTURE_INTERVAL_MIN"), 500*time.Millisecond),
+		CaptureIntervalMax:           parseDuration(os.Getenv("CAPTURE_INTERVAL_MAX"), 60*time.Second),
+		SendTimeoutMin:               parseDuration(os.Getenv("SEND_TIMEOUT_MIN"), 1*time.Second),
+		SendTimeoutMax:               parseDuration(os.Getenv("SEND_TIMEOUT_MAX"), 120*time.Second),
+		InterruptDebounce:            parseDuration(os.Getenv("INTERRUPT_DEBOUNCE"), 500*time.Millisecond),
+		AdaptiveCaptureMin:           parseDuration(os.Getenv("ADAPTIVE_CAPTURE_MIN"), 1*time.Second),
+		AdaptiveCaptureMax:           parseDuration(os.Getenv("ADAPTIVE_CAPTURE_MAX"), 5*time.Second),
+		AdaptiveCaptureIdleThreshold: parseInt(os.Getenv("ADAPTIVE_CAPTURE_IDLE_THRESHOLD"), 3),
+		PendingTableIdleWait:         parseDuration(os.Getenv("PENDING_TABLE_IDLE_WAIT"), 12*time.Second),
+		PendingCodeIdleWait:          parseDuration(os.Getenv("PENDING_CODE_IDLE_WAIT"), 5*time.Second),
+		MaxMarkdownLen:               parseInt(os.Getenv("MAX_MARKDOWN_LEN"), 3000),
+		WelcomeDelay:                 parseDuration(os.Getenv("WELCOME_DELAY"), 3*time.Second),
+		WelcomeTimeout:               parseDuration(os.Getenv("WELCOME_TIMEOUT"), 30*time.Second),
+		ImageCleanupMaxAge:           parseDuration(os.Getenv("IMAGE_CLEANUP_MAX_AGE"), 7*24*time.Hour),
+		ImageCleanupInterval:         parseDuration(os.Getenv("IMAGE_CLEANUP_INTERVAL"), 24*time.Hour),
+		CodexInputDelay:              parseDuration(os.Getenv("CODEX_INPUT_DELAY"), 150*time.Millisecond),
+
+		// Bot 重试
+		BotRetryBackoff:    parseDuration(os.Getenv("BOT_RETRY_BACKOFF"), 500*time.Millisecond),
+		BotRetryMaxBackoff: parseDuration(os.Getenv("BOT_RETRY_MAX_BACKOFF"), 30*time.Second),
+
+		// Watchdog
+		WatchdogCheckInterval: parseDuration(os.Getenv("WATCHDOG_CHECK_INTERVAL"), 6*time.Second),
+
+		// Updater
+		UpdaterFirstCheckDelay: parseDuration(os.Getenv("UPDATER_FIRST_CHECK_DELAY"), 30*time.Second),
+		UpdaterCheckInterval:   parseDuration(os.Getenv("UPDATER_CHECK_INTERVAL"), 24*time.Hour),
+		UpdaterHTTPTimeout:     parseDuration(os.Getenv("UPDATER_HTTP_TIMEOUT"), 30*time.Second),
+		DownloadHTTPTimeout:    parseDuration(os.Getenv("DOWNLOAD_HTTP_TIMEOUT"), 120*time.Second),
+		GithubAPITimeout:       parseDuration(os.Getenv("GITHUB_API_TIMEOUT"), 15*time.Second),
+
+		// Main
+		ShutdownTimeout: parseDuration(os.Getenv("SHUTDOWN_TIMEOUT"), 5*time.Second),
 	}
 	return cfg, nil
 }
