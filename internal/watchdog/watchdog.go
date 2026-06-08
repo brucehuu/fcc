@@ -90,7 +90,9 @@ func Run() error {
 		if !tmuxRunning {
 			log.Warn("[watchdog] tmux session gone but fcc still alive, killing fcc to restart...")
 			killFromPIDFile(fccPidFile)
-			_ = os.Remove(fccPidFile)
+			if err := os.Remove(fccPidFile); err != nil {
+				log.Debugf("[watchdog] remove fcc pid file: %v", err)
+			}
 			// 下一轮循环会检测到 fcc 不在并重新启动
 		}
 	}
@@ -105,7 +107,9 @@ func WriteFCCPID() error {
 
 // RemoveFCCPID 删除 fcc 的 PID 文件。
 func RemoveFCCPID() {
-	_ = os.Remove(fccPidFile)
+	if err := os.Remove(fccPidFile); err != nil {
+		log.Debugf("[watchdog] remove fcc pid file: %v", err)
+	}
 }
 
 func isWatchdogRunning() bool {
@@ -199,7 +203,9 @@ func startFCC() error {
 	}
 
 	// 清理可能残留的 tmux 会话，否则 fcc 启动会因会话已存在而失败
-	_ = exec.Command("tmux", "kill-session", "-t", "fcc").Run()
+	if err := exec.Command("tmux", "kill-session", "-t", "fcc").Run(); err != nil {
+		log.Debugf("[watchdog] kill tmux session: %v", err)
+	}
 
 	cmd := exec.Command(exe)
 	cmd.Dir = wd
@@ -256,16 +262,26 @@ func Reset() {
 
 	// 2. 兜底：杀掉从当前可执行文件路径启动的所有 fcc 进程（防止有漏网的）
 	if exe, err := os.Executable(); err == nil {
-		_ = exec.Command("pkill", "-9", "-f", exe).Run()
+		if err := exec.Command("pkill", "-9", "-f", exe).Run(); err != nil {
+			log.Debugf("[watchdog] pkill fallback: %v", err)
+		}
 	}
 
 	// 3. 清理残留的 tmux 会话
-	_ = exec.Command("tmux", "kill-session", "-t", "fcc").Run()
+	if err := exec.Command("tmux", "kill-session", "-t", "fcc").Run(); err != nil {
+		log.Debugf("[watchdog] kill tmux session: %v", err)
+	}
 
 	// 4. 删除所有 PID 文件和锁文件
-	_ = os.Remove(watchdogPidFile)
-	_ = os.Remove(fccPidFile)
-	_ = os.Remove("/tmp/fcc-watchdog.lock")
+	if err := os.Remove(watchdogPidFile); err != nil {
+		log.Debugf("[watchdog] remove pid file: %v", err)
+	}
+	if err := os.Remove(fccPidFile); err != nil {
+		log.Debugf("[watchdog] remove fcc pid file: %v", err)
+	}
+	if err := os.Remove("/tmp/fcc-watchdog.lock"); err != nil {
+		log.Debugf("[watchdog] remove lock file: %v", err)
+	}
 
 	// 5. 等待进程退出
 	time.Sleep(1 * time.Second)
@@ -286,7 +302,9 @@ func Stop() {
 		return
 	}
 	if !processExists(pid) {
-		_ = os.Remove(watchdogPidFile)
+		if err := os.Remove(watchdogPidFile); err != nil {
+			log.Debugf("[watchdog] remove pid file: %v", err)
+		}
 		return
 	}
 	proc, err := os.FindProcess(pid)
@@ -302,7 +320,9 @@ func Stop() {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	_ = os.Remove(watchdogPidFile)
+	if err := os.Remove(watchdogPidFile); err != nil {
+		log.Debugf("[watchdog] remove pid file: %v", err)
+	}
 	log.Info("[watchdog] stopped")
 }
 
@@ -319,7 +339,9 @@ func killFromPIDFile(path string) {
 	if processExists(pid) {
 		proc, err := os.FindProcess(pid)
 		if err == nil {
-			_ = proc.Signal(syscall.SIGTERM)
+			if err := proc.Signal(syscall.SIGTERM); err != nil {
+				log.Debugf("[watchdog] signal pid %d: %v", pid, err)
+			}
 		}
 	}
 }

@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"fcc/internal/log"
+
 	"fcc/internal/config"
 	"fcc/internal/updater"
 	webview "github.com/webview/webview_go"
@@ -68,7 +70,9 @@ func OpenConfig() {
 	configMu.Lock()
 	configProcess = cmd.Process
 	configMu.Unlock()
-	_ = cmd.Wait()
+	if err := cmd.Wait(); err != nil {
+		log.Warnf("[tray] config window exited: %v", err)
+	}
 }
 
 // KillConfigWindow kills the running config-window helper subprocess, if any.
@@ -78,7 +82,9 @@ func KillConfigWindow() {
 	configProcess = nil
 	configMu.Unlock()
 	if p != nil {
-		_ = p.Kill()
+		if err := p.Kill(); err != nil {
+			log.Debugf("[tray] kill config window: %v", err)
+		}
 	}
 }
 
@@ -338,7 +344,9 @@ func signalFCC(sig syscall.Signal) {
 	}
 	var pid int
 	if _, err := fmt.Sscanf(string(data), "%d", &pid); err == nil {
-		_ = syscall.Kill(pid, sig)
+		if err := syscall.Kill(pid, sig); err != nil {
+			log.Debugf("[tray] signal pid %d: %v", pid, err)
+		}
 	}
 }
 

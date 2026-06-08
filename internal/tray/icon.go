@@ -8,6 +8,8 @@ import (
 	"image/color"
 	"image/png"
 	"os"
+
+	"fcc/internal/log"
 )
 
 const (
@@ -53,7 +55,10 @@ func placeholderIcon() []byte {
 	}
 
 	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
+	if err := png.Encode(&buf, img); err != nil {
+		log.Warnf("[tray] encode placeholder icon: %v", err)
+		return nil
+	}
 	return buf.Bytes()
 }
 

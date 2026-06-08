@@ -5,6 +5,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"fcc/internal/log"
 )
 
 type TmuxSession struct {
@@ -25,7 +27,9 @@ func (t *TmuxSession) Start(command, workDir string) error {
 		return fmt.Errorf("tmux session %q already exists: kill it manually with `tmux kill-session -t %s` or re-attach with `tmux attach -t %s`", t.session, t.session, t.session)
 	}
 	// 启动 tmux server
-	_ = exec.Command("tmux", "start-server").Run()
+	if err := exec.Command("tmux", "start-server").Run(); err != nil {
+		log.Warnf("[tmux] start-server failed: %v", err)
+	}
 
 	args := []string{"new-session", "-d", "-s", t.session}
 	if workDir != "" {
@@ -40,9 +44,13 @@ func (t *TmuxSession) Start(command, workDir string) error {
 	}
 
 	// session 创建后再设置终端类型（限定到当前 session）
-	_ = exec.Command("tmux", "set-option", "-t", t.session, "default-terminal", "screen-256color").Run()
+	if err := exec.Command("tmux", "set-option", "-t", t.session, "default-terminal", "screen-256color").Run(); err != nil {
+		log.Warnf("[tmux] set-option default-terminal failed: %v", err)
+	}
 	// 确保 session 内 pane 的 TERM 环境变量正确
-	_ = exec.Command("tmux", "set-environment", "-t", t.session, "TERM", "screen-256color").Run()
+	if err := exec.Command("tmux", "set-environment", "-t", t.session, "TERM", "screen-256color").Run(); err != nil {
+		log.Warnf("[tmux] set-environment TERM failed: %v", err)
+	}
 	return nil
 }
 

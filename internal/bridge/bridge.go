@@ -383,7 +383,9 @@ func (b *Bridge) runImageCleanup(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			_ = b.CleanupOldImages(b.imageCleanupMaxAge)
+			if err := b.CleanupOldImages(b.imageCleanupMaxAge); err != nil {
+				log.Warnf("[bridge] image cleanup: %v", err)
+			}
 		}
 	}
 }
@@ -556,7 +558,9 @@ func (b *Bridge) RestartTmux(workDir string) error {
 	b.termMu.RLock()
 	oldTerm := b.term
 	b.termMu.RUnlock()
-	_ = oldTerm.Kill()
+	if err := oldTerm.Kill(); err != nil {
+		log.Debugf("[bridge] kill old tmux session: %v", err)
+	}
 	// 等待旧 session 完全消失，避免创建同名 session 失败
 	for i := 0; i < 20; i++ {
 		if !oldTerm.HasSession() {

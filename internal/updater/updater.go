@@ -112,7 +112,9 @@ func (u *Updater) checkNow() *State {
 
 	state.Status = StatusChecking
 	state.CheckedAt = time.Now()
-	_ = SaveState(state)
+	if err := SaveState(state); err != nil {
+		log.Warnf("[updater] save state: %v", err)
+	}
 
 	log.Info("[updater] checking for updates...")
 	githubClient := &http.Client{Timeout: u.githubAPITimeout}
@@ -121,7 +123,9 @@ func (u *Updater) checkNow() *State {
 		log.Warnf("[updater] fetch latest: %v", err)
 		state.Status = StatusFailed
 		state.Error = err.Error()
-		_ = SaveState(state)
+		if err := SaveState(state); err != nil {
+			log.Warnf("[updater] save state: %v", err)
+		}
 		return state
 	}
 
@@ -131,7 +135,9 @@ func (u *Updater) checkNow() *State {
 	if !CompareVersions(u.currentVersion, latest) {
 		log.Infof("[updater] up to date (current=%s, latest=%s)", u.currentVersion, latest)
 		state.Status = StatusUpToDate
-		_ = SaveState(state)
+		if err := SaveState(state); err != nil {
+			log.Warnf("[updater] save state: %v", err)
+		}
 		return state
 	}
 
@@ -149,14 +155,18 @@ func (u *Updater) checkNow() *State {
 		log.Warnf("[updater] no asset found for arch %s", "darwin-"+getArch())
 		state.Status = StatusFailed
 		state.Error = "no asset for current architecture"
-		_ = SaveState(state)
+		if err := SaveState(state); err != nil {
+			log.Warnf("[updater] save state: %v", err)
+		}
 		return state
 	}
 
 	shaURL := AssetSHA256URL(rel)
 
 	state.Status = StatusDownloading
-	_ = SaveState(state)
+	if err := SaveState(state); err != nil {
+		log.Warnf("[updater] save state: %v", err)
+	}
 
 	downloadClient := &http.Client{Timeout: u.downloadHTTPTimeout}
 	binaryPath, checksum, err := Download(downloadClient, binaryURL, shaURL, latest)
@@ -164,7 +174,9 @@ func (u *Updater) checkNow() *State {
 		log.Warnf("[updater] download failed: %v", err)
 		state.Status = StatusFailed
 		state.Error = err.Error()
-		_ = SaveState(state)
+		if err := SaveState(state); err != nil {
+			log.Warnf("[updater] save state: %v", err)
+		}
 		return state
 	}
 
@@ -173,7 +185,9 @@ func (u *Updater) checkNow() *State {
 	state.SHA256 = checksum
 	state.DownloadedAt = time.Now()
 	state.Error = ""
-	_ = SaveState(state)
+	if err := SaveState(state); err != nil {
+		log.Warnf("[updater] save state: %v", err)
+	}
 
 	log.Infof("[updater] downloaded %s to %s", latest, binaryPath)
 	return state

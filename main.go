@@ -86,7 +86,9 @@ func main() {
 
 	// 给 fcc 可执行文件自身设置 Finder 图标（幂等，失败不阻塞启动）。
 	if exe, err := os.Executable(); err == nil {
-		_ = tray.SetFinderIcon(exe, processIcon(appIconPNG, 15))
+		if err := tray.SetFinderIcon(exe, processIcon(appIconPNG, 15)); err != nil {
+			log.Debugf("[main] set finder icon: %v", err)
+		}
 	}
 
 	flag.Usage = func() {
@@ -260,7 +262,9 @@ func main() {
 				os.Exit(0)
 			}
 			if logFile != os.Stderr {
-				_ = logFile.Close()
+				if err := logFile.Close(); err != nil {
+					log.Debugf("[main] close log file: %v", err)
+				}
 			}
 		}
 	}
@@ -288,7 +292,9 @@ func main() {
 			log.Info("[main] menu quit requested — killing watchdog and tmux session")
 			watchdog.Stop()
 			// 把 tmux session 一起干掉，避免孤儿进程
-			_ = exec.Command("tmux", "kill-session", "-t", "fcc").Run()
+			if err := exec.Command("tmux", "kill-session", "-t", "fcc").Run(); err != nil {
+				log.Debugf("[main] kill tmux on quit: %v", err)
+			}
 		},
 	})
 
