@@ -1,4 +1,5 @@
 fcc
+fcc_new
 fcc-darwin-arm64
 fcc-darwin-arm64.sha256
 fcc.log
@@ -10,6 +11,7 @@ findings.md
 progress.md
 /log/
 /.fcc/
+cmd/test_log/
 .claude/
 review/
 
