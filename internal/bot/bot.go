@@ -68,11 +68,9 @@ type ImageContent struct {
 
 type botInfoResp struct {
 	Code int `json:"code"`
-	Data struct {
-		Bot struct {
-			OpenID string `json:"open_id"`
-		} `json:"bot"`
-	} `json:"data"`
+	Bot  struct {
+		OpenID string `json:"open_id"`
+	} `json:"bot"`
 }
 
 func New(appID, appSecret string, onMessage func(chatType, openID, chatID, text string), maxRetries int, retryBackoff, retryMaxBackoff time.Duration) *Bot {
@@ -99,7 +97,13 @@ func New(appID, appSecret string, onMessage func(chatType, openID, chatID, text 
 
 	b.wsClient = larkws.NewClient(appID, appSecret,
 		larkws.WithEventHandler(d),
-		larkws.WithLogLevel(larkcore.LogLevelInfo),
+		larkws.WithLogLevel(larkcore.LogLevelDebug),
+		larkws.WithOnReady(func() {
+			log.Info("[bot] websocket connected successfully")
+		}),
+		larkws.WithOnError(func(err error) {
+			log.Warnf("[bot] websocket error: %v", err)
+		}),
 	)
 
 	return b
@@ -113,6 +117,7 @@ func ptrStr(s *string) string {
 }
 
 func (b *Bot) handleEvent(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
+	log.Info("[bot] handleEvent called")
 	if event.Event == nil || event.Event.Message == nil {
 		log.Debugf("[bot] handleEvent: event or message is nil")
 		return nil
@@ -359,11 +364,14 @@ func (b *Bot) CleanupOldImages(maxAge time.Duration) error {
 }
 
 func (b *Bot) fetchBotOpenID(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	resp, err := b.client.Get(ctx, "/open-apis/bot/v3/info", nil, larkcore.AccessTokenTypeTenant)
 	if err != nil {
 		return fmt.Errorf("failed to fetch bot info: %w", err)
 	}
 
+	log.Debugf("[bot] fetchBotOpenID raw response: %s", string(resp.RawBody))
 	var result botInfoResp
 	if err := json.Unmarshal(resp.RawBody, &result); err != nil {
 		return fmt.Errorf("failed to parse bot info: %w", err)
@@ -373,9 +381,9 @@ func (b *Bot) fetchBotOpenID(ctx context.Context) error {
 	}
 
 	b.botIDMu.Lock()
-	b.botOpenID = result.Data.Bot.OpenID
+	b.botOpenID = result.Bot.OpenID
 	b.botIDMu.Unlock()
-	log.Infof("[bot] bot open_id: %s", result.Data.Bot.OpenID)
+	log.Infof("[bot] bot open_id: %s", result.Bot.OpenID)
 	return nil
 }
 

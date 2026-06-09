@@ -148,6 +148,70 @@ func IsClaudeUserEchoLine(line, userMessage string) bool {
 	return echo == normalizeClaudeLine(firstLine)
 }
 
+// MatchClaudeUserEchoWrapped 检测被终端折行的用户输入回显。
+// 当用户消息太长导致 tmux 折行时，回显会分成多行（第一行有 ❯/›/> 前缀，后续行只有前导空格）。
+// 返回匹配的行数（0 表示不是用户回显）。
+func MatchClaudeUserEchoWrapped(lines []string, start int, userMessage string) int {
+	if start >= len(lines) {
+		return 0
+	}
+	line := normalizeClaudeLine(lines[start])
+	if !userEchoPromptRe.MatchString(line) {
+		return 0
+	}
+
+	echo := userEchoPromptRe.ReplaceAllString(line, "")
+	normUserMsg := normalizeWhitespace(userMessage)
+
+	if normalizeWhitespace(echo) == normUserMsg {
+		return 1
+	}
+
+	firstLine, _, _ := strings.Cut(userMessage, "\n")
+	if normalizeWhitespace(echo) == normalizeWhitespace(firstLine) {
+		return 1
+	}
+
+	// 折行检测：echo 是 userMessage 的前缀，尝试拼接后续行
+	var builder strings.Builder
+	builder.WriteString(echo)
+	matched := 1
+	for j := start + 1; j < len(lines) && matched < 20; j++ {
+		nextRaw := lines[j]
+		// 如果下一行也带有提示符，说明是新的输入，停止
+		if userEchoPromptRe.MatchString(normalizeClaudeLine(nextRaw)) {
+			break
+		}
+		next := strings.TrimSpace(nextRaw)
+		if next == "" {
+			break
+		}
+		builder.WriteString(next)
+		matched++
+		if normalizeWhitespace(builder.String()) == normUserMsg {
+			return matched
+		}
+	}
+	return 0
+}
+
+func normalizeWhitespace(s string) string {
+	var sb strings.Builder
+	inSpace := false
+	for _, r := range strings.TrimSpace(s) {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			inSpace = true
+			continue
+		}
+		if inSpace && sb.Len() > 0 {
+			sb.WriteRune(' ')
+		}
+		sb.WriteRune(r)
+		inSpace = false
+	}
+	return sb.String()
+}
+
 func normalizeClaudeLine(line string) string {
 	line = ansiEscapeRe.ReplaceAllString(line, "")
 	line = strings.NewReplacer(

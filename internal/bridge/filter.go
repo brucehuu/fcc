@@ -28,7 +28,12 @@ func (b *Bridge) filterPane(pane string) string {
 	skipClaudeProgressContinuation := false
 	skipClaudeToolOutput := false
 	skipCodexToolOutput := false
+	skipUserEchoLines := 0
 	for i := 0; i < len(lines); i++ {
+		if skipUserEchoLines > 0 {
+			skipUserEchoLines--
+			continue
+		}
 		rawLine := strings.TrimRight(lines[i], " \t\r")
 		line := strings.TrimSpace(rawLine)
 		if line == "" {
@@ -117,8 +122,11 @@ func (b *Bridge) filterPane(pane string) string {
 			continue
 		}
 
-		if b.isClaude && IsClaudeUserEchoLine(line, userMsg) {
-			continue
+		if b.isClaude {
+			if matched := MatchClaudeUserEchoWrapped(lines, i, userMsg); matched > 0 {
+				skipUserEchoLines = matched - 1
+				continue
+			}
 		}
 
 		if b.isNoiseLine(line) {

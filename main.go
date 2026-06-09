@@ -127,6 +127,7 @@ func main() {
 		}
 	}
 	log.SetLevel(cfg.LogLevel)
+	log.Infof("[main] log level set to: %s", cfg.LogLevel)
 
 	// 启动 watchdog（完全独立进程）
 	if err := watchdog.ForkIfNeeded(); err != nil {

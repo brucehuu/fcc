@@ -99,8 +99,13 @@ func buildCommand(cfg *BridgeConfig) string {
 	command := cfg.Command
 	// 如果启用了 bypass permissions，追加对应工具的免确认参数
 	if cfg.BypassPermissions {
-		if isClaudeCommand(command) && !strings.Contains(command, "--dangerously-skip-permissions") {
-			command += " --dangerously-skip-permissions"
+		if isClaudeCommand(command) {
+			if !strings.Contains(command, "--dangerously-skip-permissions") {
+				command += " --dangerously-skip-permissions"
+			}
+			if !strings.Contains(command, "--permission-mode") {
+				command += " --permission-mode bypassPermissions"
+			}
 		} else if isCodexCommand(command) && !strings.Contains(command, "--dangerously-bypass-approvals-and-sandbox") {
 			command += " --dangerously-bypass-approvals-and-sandbox"
 		}
@@ -268,6 +273,23 @@ func looksLikeImagePath(text string) bool {
 	return err == nil && !info.IsDir()
 }
 
+// toRelativePath 把绝对路径转为相对当前工作目录的路径，避免终端折行导致 @path 失效。
+func toRelativePath(absPath string) string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return absPath
+	}
+	sep := string(filepath.Separator)
+	if !strings.HasPrefix(absPath, cwd+sep) {
+		return absPath
+	}
+	rel, err := filepath.Rel(cwd, absPath)
+	if err != nil {
+		return absPath
+	}
+	return rel
+}
+
 // extractImagePaths 从 text 中提取所有本地图片路径（支持空格或换行分隔）。
 func extractImagePaths(text string) []string {
 	fields := strings.Fields(text)
@@ -337,19 +359,35 @@ func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 	s.contentBuf.Reset()
 	s.sendMu.Unlock()
 
-	// 如果收到的是本地图片路径，包装成 Claude 可识别的 @path 文件引用。
-	// 支持多图：空格或换行分隔的多个路径都会被提取。
+	// 如果收到的是本地图片路径，包装成自然语言提示让 Claude Code 用 Read 工具读取。
+	// Claude Code 的 Read 工具支持图片文件（自动转 base64），无需依赖 @path 交互式选择器。
 	if paths := extractImagePaths(text); len(paths) > 0 {
-		var parts []string
+		var imgParts []string
 		for _, p := range paths {
-			log.Debugf("[bridge] detected image path, isClaude=%v: %s", b.isClaude, p)
-			if b.isClaude {
-				parts = append(parts, fmt.Sprintf("@%s", p))
+			rel := toRelativePath(p)
+			log.Debugf("[bridge] detected image path, isClaude=%v: abs=%s rel=%s", b.isClaude, p, rel)
+			imgParts = append(imgParts, rel)
+		}
+		// 提取非图片路径的文字内容
+		otherText := text
+		for _, p := range paths {
+			otherText = strings.Replace(otherText, p, "", 1)
+		}
+		otherText = strings.TrimSpace(otherText)
+
+		if b.isClaude {
+			if otherText == "" {
+				text = fmt.Sprintf("请查看并分析以下图片：%s", strings.Join(imgParts, "，"))
 			} else {
-				parts = append(parts, fmt.Sprintf("（用户发送了图片：%s）", p))
+				text = fmt.Sprintf("%s（图片路径：%s，请查看分析）", otherText, strings.Join(imgParts, "，"))
+			}
+		} else {
+			if otherText == "" {
+				text = fmt.Sprintf("（用户发送了图片：%s）", strings.Join(imgParts, "，"))
+			} else {
+				text = fmt.Sprintf("%s（用户发送了图片：%s）", otherText, strings.Join(imgParts, "，"))
 			}
 		}
-		text = strings.Join(parts, " ")
 	} else if strings.HasPrefix(text, "[") && strings.Contains(text, "图片") {
 		log.Warnf("[bridge] received image-related fallback text: %q", text)
 	}
@@ -375,14 +413,7 @@ func (b *Bridge) sendUserInputToTerminal(term Terminal, text string) error {
 		if err := term.SendKeys(text); err != nil {
 			return err
 		}
-		// Claude Code 的 @path 文件引用需要额外一次 Enter 来提交选择器。
-		if len(extractImagePaths(text)) > 0 {
-			time.Sleep(200 * time.Millisecond)
-			if err := term.SendSpecialKey("Enter"); err != nil {
-				return err
-			}
-		}
-		return nil
+		return term.SendSpecialKey("Enter")
 	}
 	if err := term.SendLiteral(text); err != nil {
 		return err
@@ -544,9 +575,11 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 
 	filtered := b.filterPane(pane)
 	hasDiff := false
+	receiverCount := 0
 
 	// 遍历所有 receiver，并发计算 diff 并发送
 	b.receivers.Range(func(k, v interface{}) bool {
+		receiverCount++
 		key := k.(receiverKey)
 		state := v.(*receiverState)
 
@@ -567,6 +600,7 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 			return true
 		}
 		hasDiff = true
+		log.Infof("[bridge] captureAndSend diff len=%d for receiver=%s", len(diff), key.id)
 
 		// Send to the same receiver serially so newer diffs cannot overtake older ones.
 		state.sendMu.Lock()
@@ -578,6 +612,9 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 		}()
 		return true
 	})
+
+	log.Debugf("[bridge] captureAndSend: receivers=%d paneLines=%d filteredLines=%d hasDiff=%v",
+		receiverCount, len(strings.Split(pane, "\n")), len(strings.Split(filtered, "\n")), hasDiff)
 
 	if hasDiff {
 		b.metrics.diffHits.Add(1)

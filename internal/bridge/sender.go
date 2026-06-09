@@ -12,6 +12,7 @@ import (
 // 然后更新已有消息或发送新消息。所有内容最终只体现在一条不断追加的消息里。
 func (b *Bridge) sendBlocks(ctx context.Context, key receiverKey, diff string) {
 	blocks := splitDiffIntoBlocks(diff)
+	log.Infof("[bridge] sendBlocks: receiver=%s blocks=%d diffPreview=%q", key.id, len(blocks), log.Truncate(diff, 200))
 
 	// sendMu 已锁定，串行访问 contentBuf 和 messageID
 	val, _ := b.receivers.Load(key)
@@ -237,6 +238,7 @@ func (b *Bridge) sendMarkdownContent(ctx context.Context, key receiverKey, state
 }
 
 func (b *Bridge) sendMarkdownChunk(ctx context.Context, key receiverKey, state *receiverState, incoming string) {
+	log.Infof("[bridge] sendMarkdownChunk: receiver=%s len=%d preview=%q", key.id, len(incoming), log.Truncate(incoming, 200))
 	// 追加到累积 buffer
 	current := compactMarkdownSpacing(state.contentBuf.String())
 	separator := ""

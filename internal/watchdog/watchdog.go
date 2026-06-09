@@ -198,9 +198,8 @@ func startFCC() error {
 	logFile, err := os.OpenFile("log/fcc-restart.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		logFile = os.Stderr
-	} else {
-		defer logFile.Close()
 	}
+	// 注意：此处不关闭 logFile，子进程需要继承这个 fd 写入日志
 
 	// 清理可能残留的 tmux 会话，否则 fcc 启动会因会话已存在而失败
 	if err := exec.Command("tmux", "kill-session", "-t", "fcc").Run(); err != nil {
@@ -212,7 +211,7 @@ func startFCC() error {
 	// 关键：必须去掉 WATCHDOG=1，否则启动的还是 watchdog 模式
 	cmd.Env = stripEnv(os.Environ(), "WATCHDOG")
 	cmd.Stdin = nil
-	cmd.Stdout = nil
+	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
