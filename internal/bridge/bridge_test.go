@@ -886,8 +886,11 @@ func TestSendUserInputToTerminalNonCodexKeepsLegacySendKeys(t *testing.T) {
 	if len(tm.sentKeys) != 1 || tm.sentKeys[0] != "hello" {
 		t.Fatalf("sentKeys = %v, want [hello]", tm.sentKeys)
 	}
-	if len(tm.sentLiteral) != 0 || len(tm.sentSpecial) != 0 {
-		t.Fatalf("non-Codex should not use literal/special, got literal=%v special=%v", tm.sentLiteral, tm.sentSpecial)
+	if len(tm.sentLiteral) != 0 {
+		t.Fatalf("non-Codex should not use literal, got literal=%v", tm.sentLiteral)
+	}
+	if len(tm.sentSpecial) != 1 || tm.sentSpecial[0] != "Enter" {
+		t.Fatalf("sentSpecial = %v, want [Enter]", tm.sentSpecial)
 	}
 }
 

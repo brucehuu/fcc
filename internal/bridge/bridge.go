@@ -102,13 +102,8 @@ func buildCommand(cfg *BridgeConfig) string {
 	command := cfg.Command
 	// 如果启用了 bypass permissions，追加对应工具的免确认参数
 	if cfg.BypassPermissions {
-		if isClaudeCommand(command) {
-			if !strings.Contains(command, "--dangerously-skip-permissions") {
-				command += " --dangerously-skip-permissions"
-			}
-			if !strings.Contains(command, "--permission-mode") {
-				command += " --permission-mode bypassPermissions"
-			}
+		if isClaudeCommand(command) && !strings.Contains(command, "--dangerously-skip-permissions") {
+			command += " --dangerously-skip-permissions"
 		} else if isCodexCommand(command) && !strings.Contains(command, "--dangerously-bypass-approvals-and-sandbox") {
 			command += " --dangerously-bypass-approvals-and-sandbox"
 		}
