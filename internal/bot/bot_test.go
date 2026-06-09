@@ -242,14 +242,12 @@ func TestParseMessageImageNoKey(t *testing.T) {
 }
 
 func TestCleanupOldImages(t *testing.T) {
-	origDir := "log/images"
+	origDir := ".fcc/images"
 
-	// Override the dir by temporarily changing cwd or using a helper.
-	// Since CleanupOldImages hardcodes "log/images", we create it under cwd.
 	if err := os.MkdirAll(origDir, 0755); err != nil {
 		t.Fatalf("MkdirAll error = %v", err)
 	}
-	defer os.RemoveAll("log")
+	defer os.RemoveAll(".fcc")
 
 	// Create an old file.
 	oldFile := filepath.Join(origDir, "old.png")
@@ -285,8 +283,8 @@ func TestCleanupOldImages(t *testing.T) {
 
 func TestCleanupOldImagesNoDir(t *testing.T) {
 	b := New("test-id", "test-secret", nil, 3, 0, 0)
-	// Clean up any existing log/images first.
-	os.RemoveAll("log")
+	// Clean up any existing .fcc/images first.
+	os.RemoveAll(".fcc")
 	if err := b.CleanupOldImages(24 * time.Hour); err != nil {
 		t.Fatalf("CleanupOldImages() error = %v", err)
 	}

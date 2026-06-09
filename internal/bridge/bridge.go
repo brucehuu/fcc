@@ -3,6 +3,8 @@ package bridge
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -163,6 +165,12 @@ func New(cfg *BridgeConfig) (*Bridge, error) {
 	}
 	b.messenger = bot.New(cfg.AppID, cfg.AppSecret, b.handleMessage, cfg.SendRetries, cfg.BotRetryBackoff, cfg.BotRetryMaxBackoff)
 
+	imageDir := ".fcc/images"
+	if cfg.WorkDir != "" {
+		imageDir = filepath.Join(cfg.WorkDir, ".fcc", "images")
+	}
+	b.messenger.SetImageDir(imageDir)
+
 	tm := terminal.NewTmuxSession("fcc")
 	if !tm.IsAvailable() {
 		b.messenger.Close()
@@ -251,6 +259,27 @@ func isInterruptCommand(text string) bool {
 	return false
 }
 
+func looksLikeImagePath(text string) bool {
+	ext := strings.ToLower(filepath.Ext(text))
+	if ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".gif" && ext != ".webp" {
+		return false
+	}
+	info, err := os.Stat(text)
+	return err == nil && !info.IsDir()
+}
+
+// extractImagePaths 从 text 中提取所有本地图片路径（支持空格或换行分隔）。
+func extractImagePaths(text string) []string {
+	fields := strings.Fields(text)
+	var paths []string
+	for _, f := range fields {
+		if looksLikeImagePath(f) {
+			paths = append(paths, f)
+		}
+	}
+	return paths
+}
+
 func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -308,6 +337,23 @@ func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 	s.contentBuf.Reset()
 	s.sendMu.Unlock()
 
+	// 如果收到的是本地图片路径，包装成 Claude 可识别的 @path 文件引用。
+	// 支持多图：空格或换行分隔的多个路径都会被提取。
+	if paths := extractImagePaths(text); len(paths) > 0 {
+		var parts []string
+		for _, p := range paths {
+			log.Debugf("[bridge] detected image path, isClaude=%v: %s", b.isClaude, p)
+			if b.isClaude {
+				parts = append(parts, fmt.Sprintf("@%s", p))
+			} else {
+				parts = append(parts, fmt.Sprintf("（用户发送了图片：%s）", p))
+			}
+		}
+		text = strings.Join(parts, " ")
+	} else if strings.HasPrefix(text, "[") && strings.Contains(text, "图片") {
+		log.Warnf("[bridge] received image-related fallback text: %q", text)
+	}
+
 	// 记录用户消息（trim 后），用于后续过滤 tmux 中的回显 + Tip 组合
 	b.lastUserMsgMu.Lock()
 	b.lastUserMessage = strings.TrimSpace(text)
@@ -324,8 +370,19 @@ func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 }
 
 func (b *Bridge) sendUserInputToTerminal(term Terminal, text string) error {
+	log.Debugf("[bridge] sendUserInputToTerminal: isCodex=%v text=%q", b.isCodex, log.Truncate(text, 200))
 	if !b.isCodex {
-		return term.SendKeys(text)
+		if err := term.SendKeys(text); err != nil {
+			return err
+		}
+		// Claude Code 的 @path 文件引用需要额外一次 Enter 来提交选择器。
+		if len(extractImagePaths(text)) > 0 {
+			time.Sleep(200 * time.Millisecond)
+			if err := term.SendSpecialKey("Enter"); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	if err := term.SendLiteral(text); err != nil {
 		return err

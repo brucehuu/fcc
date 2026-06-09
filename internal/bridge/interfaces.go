@@ -15,6 +15,7 @@ type Messenger interface {
 	SendInteractiveTable(ctx context.Context, receiveIDType, receiveID, markdownTable string) error
 	SendWelcome(ctx context.Context, targetName, text string) error
 	CleanupOldImages(maxAge time.Duration) error
+	SetImageDir(dir string)
 	Close()
 }
 

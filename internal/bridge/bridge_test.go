@@ -2,6 +2,8 @@ package bridge
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -32,6 +34,67 @@ func TestIsInterruptCommand(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("isInterruptCommand(%q) = %v, want %v", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestLooksLikeImagePath(t *testing.T) {
+	tmp := t.TempDir()
+	pngPath := filepath.Join(tmp, "test.png")
+	jpgPath := filepath.Join(tmp, "test.jpg")
+	os.WriteFile(pngPath, []byte("fake"), 0644)
+	os.WriteFile(jpgPath, []byte("fake"), 0644)
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{"png exists", pngPath, true},
+		{"jpg exists", jpgPath, true},
+		{"nonexistent png", filepath.Join(tmp, "no.png"), false},
+		{"plain text", "hello world", false},
+		{"directory", tmp, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := looksLikeImagePath(tt.text)
+			if got != tt.want {
+				t.Errorf("looksLikeImagePath(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractImagePaths(t *testing.T) {
+	tmp := t.TempDir()
+	pngPath := filepath.Join(tmp, "a.png")
+	jpgPath := filepath.Join(tmp, "b.jpg")
+	os.WriteFile(pngPath, []byte("fake"), 0644)
+	os.WriteFile(jpgPath, []byte("fake"), 0644)
+
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{"single png", pngPath, []string{pngPath}},
+		{"space separated", pngPath + " " + jpgPath, []string{pngPath, jpgPath}},
+		{"newline separated", pngPath + "\n" + jpgPath, []string{pngPath, jpgPath}},
+		{"mixed with text", "look at " + pngPath + " please", []string{pngPath}},
+		{"no images", "hello world", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := extractImagePaths(tt.text)
+			if len(got) != len(tt.want) {
+				t.Fatalf("extractImagePaths(%q) = %v, want %v", tt.text, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("extractImagePaths(%q)[%d] = %q, want %q", tt.text, i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }
 
@@ -1334,6 +1397,7 @@ func (m *mockMessenger) UpdateMessage(ctx context.Context, messageID, content st
 }
 func (m *mockMessenger) SendWelcome(ctx context.Context, targetName, text string) error { return nil }
 func (m *mockMessenger) CleanupOldImages(maxAge time.Duration) error                    { return nil }
+func (m *mockMessenger) SetImageDir(dir string)                                         {}
 func (m *mockMessenger) Close()                                                         {}
 
 func (m *mockMessenger) Texts() []string {

@@ -30,6 +30,7 @@ type Bot struct {
 	retryBackoff    time.Duration
 	retryMaxBackoff time.Duration
 	closeOnce       sync.Once
+	imageDir        string
 }
 
 type TextContent struct {
@@ -40,9 +41,14 @@ type MarkdownContent struct {
 	Text string `json:"text"`
 }
 
-// PostContent 飞书 post（富文本）消息类型的 content 结构
+// PostContent 飞书 post（富文本）消息类型的 content 结构。
+// 飞书 post 消息有两种 payload 形式：
+//   1. 直接 {"title":"","content":[[...]]}
+//   2. 包裹 {"zh_cn":{"title":"","content":[[...]]}}
 type PostContent struct {
-	ZhCn PostLocale `json:"zh_cn"`
+	Title   string          `json:"title"`
+	Content [][]PostElement `json:"content"`
+	ZhCn    *PostLocale     `json:"zh_cn"`
 }
 
 type PostLocale struct {
@@ -51,8 +57,9 @@ type PostLocale struct {
 }
 
 type PostElement struct {
-	Tag  string `json:"tag"`
-	Text string `json:"text"`
+	Tag      string `json:"tag"`
+	Text     string `json:"text"`
+	ImageKey string `json:"image_key"`
 }
 
 type ImageContent struct {
@@ -84,6 +91,7 @@ func New(appID, appSecret string, onMessage func(chatType, openID, chatID, text 
 		maxRetries:      maxRetries,
 		retryBackoff:    retryBackoff,
 		retryMaxBackoff: retryMaxBackoff,
+		imageDir:        ".fcc/images",
 	}
 
 	d := dispatcher.NewEventDispatcher("", "").
@@ -106,17 +114,22 @@ func ptrStr(s *string) string {
 
 func (b *Bot) handleEvent(ctx context.Context, event *larkim.P2MessageReceiveV1) error {
 	if event.Event == nil || event.Event.Message == nil {
+		log.Debugf("[bot] handleEvent: event or message is nil")
 		return nil
 	}
 	msg := event.Event.Message
 
 	chatType := ptrStr(msg.ChatType)
+	msgType := ptrStr(msg.MessageType)
+	log.Infof("[bot] handleEvent: chat_type=%s msg_type=%s content=%s", chatType, msgType, log.Truncate(ptrStr(msg.Content), 200))
+
 	if chatType != "p2p" && chatType != "group" {
+		log.Warnf("[bot] handleEvent: drop unsupported chat_type=%s", chatType)
 		return nil
 	}
 
-	msgType := ptrStr(msg.MessageType)
-	if msgType != "text" && msgType != "image" {
+	if msgType != "text" && msgType != "image" && msgType != "post" {
+		log.Warnf("[bot] handleEvent: drop unsupported msg_type=%s", msgType)
 		return nil
 	}
 
@@ -128,22 +141,30 @@ func (b *Bot) handleEvent(ctx context.Context, event *larkim.P2MessageReceiveV1)
 	if sender == nil {
 		// 无法确定发送者身份，保守过滤（避免 bot 自己消息回显）
 		if botID != "" {
+			log.Debugf("[bot] handleEvent: drop message with nil sender (botID known)")
 			return nil
 		}
 	} else {
 		if senderType := ptrStr(sender.SenderType); senderType != "" && senderType != "user" {
+			log.Debugf("[bot] handleEvent: drop message from sender_type=%s", senderType)
 			return nil
 		}
 		if sender.SenderId != nil {
 			openID = ptrStr(sender.SenderId.OpenId)
 		}
 		if botID != "" && openID == botID {
+			log.Debugf("[bot] handleEvent: drop message from self (openID=%s)", openID)
 			return nil
 		}
 	}
 
 	text, err := b.parseMessage(ctx, msgType, ptrStr(msg.Content), msg.MessageId)
-	if err != nil || text == "" {
+	if err != nil {
+		log.Warnf("[bot] handleEvent: parseMessage failed: %v", err)
+		return nil
+	}
+	if text == "" {
+		log.Debugf("[bot] handleEvent: parseMessage returned empty text (msg_type=%s)", msgType)
 		return nil
 	}
 
@@ -152,6 +173,11 @@ func (b *Bot) handleEvent(ctx context.Context, event *larkim.P2MessageReceiveV1)
 	log.Infof("[bot] %s msg from %s: %q", chatType, openID, log.Truncate(text, 80))
 	b.onMessage(chatType, openID, chatID, text)
 	return nil
+}
+
+// SetImageDir 设置图片下载保存目录（默认 log/images）。
+func (b *Bot) SetImageDir(dir string) {
+	b.imageDir = dir
 }
 
 // parseMessage 根据消息类型解析出文本内容
@@ -166,21 +192,79 @@ func (b *Bot) parseMessage(ctx context.Context, msgType, msgContent string, msgI
 	case "image":
 		var content ImageContent
 		if err := json.Unmarshal([]byte(msgContent), &content); err != nil {
+			log.Warnf("[bot] parseMessage: invalid image content json: %v", err)
 			return "", err
 		}
 		if content.ImageKey == "" {
+			log.Debugf("[bot] parseMessage: image content has empty image_key")
 			return "", nil
 		}
 		id := ""
 		if msgID != nil {
 			id = *msgID
 		}
+		log.Infof("[bot] parseMessage: downloading image msg_id=%s image_key=%s", id, content.ImageKey)
 		imagePath, err := b.downloadImage(ctx, id, content.ImageKey)
 		if err != nil {
 			log.Warnf("[bot] download image failed: %v", err)
-			return "[用户发送了一张图片，但下载失败]", nil
+			return fmt.Sprintf("[图片下载失败: %v]", err), nil
 		}
-		return fmt.Sprintf("[用户发送了一张图片: %s]", imagePath), nil
+		log.Infof("[bot] parseMessage: image saved to %s", imagePath)
+		return imagePath, nil
+	case "post":
+		var content PostContent
+		if err := json.Unmarshal([]byte(msgContent), &content); err != nil {
+			log.Warnf("[bot] parseMessage: invalid post content json: %v", err)
+			return "", err
+		}
+		elements := content.Content
+		if content.ZhCn != nil {
+			elements = content.ZhCn.Content
+		}
+		imageKeys := make([]string, 0)
+		seen := make(map[string]bool)
+		var textParts []string
+		for _, line := range elements {
+			for _, elem := range line {
+				switch elem.Tag {
+				case "img":
+					if elem.ImageKey != "" && !seen[elem.ImageKey] {
+						seen[elem.ImageKey] = true
+						imageKeys = append(imageKeys, elem.ImageKey)
+					}
+				case "text":
+					if elem.Text != "" {
+						textParts = append(textParts, elem.Text)
+					}
+				}
+			}
+		}
+		if len(imageKeys) == 0 {
+			return strings.TrimSpace(strings.Join(textParts, " ")), nil
+		}
+		id := ""
+		if msgID != nil {
+			id = *msgID
+		}
+		paths := make([]string, 0, len(imageKeys))
+		for _, key := range imageKeys {
+			log.Infof("[bot] parseMessage: downloading post image msg_id=%s image_key=%s", id, key)
+			imagePath, err := b.downloadImage(ctx, id, key)
+			if err != nil {
+				log.Warnf("[bot] download post image failed: %v", err)
+				continue
+			}
+			log.Infof("[bot] parseMessage: post image saved to %s", imagePath)
+			paths = append(paths, imagePath)
+		}
+		if len(paths) == 0 {
+			return "[图片下载失败]", nil
+		}
+		joinedPaths := strings.Join(paths, " ")
+		if len(textParts) > 0 {
+			return strings.TrimSpace(strings.Join(textParts, " ") + " " + joinedPaths), nil
+		}
+		return joinedPaths, nil
 	default:
 		return "", nil
 	}
@@ -192,9 +276,14 @@ func (b *Bot) downloadImage(ctx context.Context, messageID, imageKey string) (st
 	}
 
 	path := fmt.Sprintf("/open-apis/im/v1/messages/%s/resources/%s?type=image", messageID, imageKey)
+	log.Debugf("[bot] downloadImage: GET %s", path)
 	resp, err := b.client.Get(ctx, path, nil, larkcore.AccessTokenTypeTenant)
 	if err != nil {
 		return "", fmt.Errorf("download image failed: %w", err)
+	}
+	log.Debugf("[bot] downloadImage: status=%d body_len=%d", resp.StatusCode, len(resp.RawBody))
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("download image returned status=%d body=%s", resp.StatusCode, string(resp.RawBody))
 	}
 
 	const maxImageSize = 10 * 1024 * 1024 // 10MB
@@ -203,7 +292,11 @@ func (b *Bot) downloadImage(ctx context.Context, messageID, imageKey string) (st
 	}
 
 	// 保存图片到本地
-	dir := "log/images"
+	dir := b.imageDir
+	if dir == "" {
+		dir = ".fcc/images"
+	}
+	log.Debugf("[bot] downloadImage: saving to dir=%s", dir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("create image dir failed: %w", err)
 	}
@@ -220,13 +313,21 @@ func (b *Bot) downloadImage(ctx context.Context, messageID, imageKey string) (st
 		return "", fmt.Errorf("write image file failed: %w", err)
 	}
 
-	return fmt.Sprintf("[图片已保存: %s]", filepath.Base(filename)), nil
+	absPath, err := filepath.Abs(filename)
+	if err != nil {
+		return filename, nil
+	}
+	log.Debugf("[bot] downloadImage: saved %s", absPath)
+	return absPath, nil
 }
 
 // CleanupOldImages 清理 N 天前的图片，防止磁盘无限增长
 // 由 main 启动时和定期调用
 func (b *Bot) CleanupOldImages(maxAge time.Duration) error {
-	dir := "log/images"
+	dir := b.imageDir
+	if dir == "" {
+		dir = ".fcc/images"
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
