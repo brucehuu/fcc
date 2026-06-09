@@ -127,6 +127,9 @@ func (b *Bridge) filterPane(pane string) string {
 				skipUserEchoLines = matched - 1
 				continue
 			}
+			if matchClaudeUserEchoNoPrompt(lines[i], userMsg) > 0 {
+				continue
+			}
 		}
 
 		if b.isNoiseLine(line) {
@@ -176,6 +179,9 @@ func (b *Bridge) filterPane(pane string) string {
 	for len(result) > 0 && result[len(result)-1] == "" {
 		result = result[:len(result)-1]
 	}
+	if b.isClaude {
+		result = FilterClaudeAnswerStart(result)
+	}
 	return strings.Join(result, "\n")
 }
 
@@ -212,6 +218,14 @@ func (b *Bridge) isNoiseLine(line string) bool {
 	}
 	// 仅 Claude 命令：过滤 TUI 装饰性状态行（spinner、Thinking... 等）
 	if b.isClaude && isClaudeDecorativeLine(line) {
+		return true
+	}
+	// 仅 Claude 命令：过滤特有的短噪音行
+	if b.isClaude && IsClaudeEnableNoise(line) {
+		return true
+	}
+	// 仅 Claude 命令：过滤启动/图片分析时的噪音
+	if b.isClaude && IsClaudeStartupNoise(line) {
 		return true
 	}
 	return false

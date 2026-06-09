@@ -195,6 +195,20 @@ func MatchClaudeUserEchoWrapped(lines []string, start int, userMessage string) i
 	return 0
 }
 
+// 无提示符前缀的回显匹配（Claude 工具调用期间输入框可能不显示前缀）
+func matchClaudeUserEchoNoPrompt(line, userMessage string) int {
+	if userMessage == "" {
+		return 0
+	}
+	normUserMsg := normalizeWhitespace(userMessage)
+	firstLine, _, _ := strings.Cut(userMessage, "\n")
+	normLine := normalizeWhitespace(line)
+	if normLine == normUserMsg || normLine == normalizeWhitespace(firstLine) {
+		return 1
+	}
+	return 0
+}
+
 func normalizeWhitespace(s string) string {
 	var sb strings.Builder
 	inSpace := false
@@ -211,6 +225,50 @@ func normalizeWhitespace(s string) string {
 	}
 	return sb.String()
 }
+
+// IsClaudeEnableNoise 判断是否是 Claude 特有的短噪音行（如工具调用后的 enable.）。
+func IsClaudeEnableNoise(line string) bool {
+	return strings.TrimSpace(strings.ToLower(line)) == "enable."
+}
+
+// FilterClaudeAnswerStart 找到 Claude 正式回答的起点（● ⬜ ○ ◦ ⏺ 等标记），移除之前的噪音。
+func FilterClaudeAnswerStart(lines []string) []string {
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "●") || strings.HasPrefix(trimmed, "⬜") ||
+			strings.HasPrefix(trimmed, "○") || strings.HasPrefix(trimmed, "◦") ||
+			strings.HasPrefix(trimmed, "⏺") {
+			return lines[i:]
+		}
+	}
+	return lines
+}
+
+// IsClaudeStartupNoise 过滤 Claude Code 启动/分析图片时产生的噪音行。
+func IsClaudeStartupNoise(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	// Claude Code 版本标题
+	if strings.HasPrefix(trimmed, "Claude Code v") {
+		return true
+	}
+	// 欢迎界面
+	if strings.Contains(trimmed, "Welcome back!") {
+		return true
+	}
+	// 短文件名行（如 39c72g.png）
+	if startupFileRe.MatchString(trimmed) {
+		return true
+	}
+	return false
+}
+
+var startupFileRe = regexp.MustCompile(`^[a-zA-Z0-9_]+\.png$`)
 
 func normalizeClaudeLine(line string) string {
 	line = ansiEscapeRe.ReplaceAllString(line, "")
