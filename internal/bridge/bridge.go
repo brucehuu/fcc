@@ -11,6 +11,7 @@ import (
 
 	"fcc/internal/bot"
 	"fcc/internal/config"
+	"fcc/internal/dialog"
 	"fcc/internal/log"
 	"fcc/internal/terminal"
 )
@@ -75,6 +76,8 @@ type Bridge struct {
 
 	lastUserMessage string     // 最近从飞书收到的用户消息，用于过滤 tmux 回显
 	lastUserMsgMu   sync.Mutex // 保护 lastUserMessage
+
+	dialogLogger *dialog.Logger // 飞书-Claude 对话日志记录器
 
 	// 调优参数（从 BridgeConfig 传入）
 	captureIntervalMin           time.Duration
@@ -186,6 +189,12 @@ func New(cfg *BridgeConfig) (*Bridge, error) {
 		return nil, fmt.Errorf("failed to start tmux session: %w", err)
 	}
 	b.term = tm
+
+	logDir := ".fcc/logs"
+	if cfg.WorkDir != "" {
+		logDir = filepath.Join(cfg.WorkDir, ".fcc", "logs")
+	}
+	b.dialogLogger = dialog.NewLogger(logDir)
 
 	return b, nil
 }
@@ -398,6 +407,9 @@ func (b *Bridge) handleMessage(chatType, openID, chatID, text string) {
 	b.lastUserMsgMu.Unlock()
 
 	b.metrics.messagesReceived.Add(1)
+	if b.dialogLogger != nil {
+		b.dialogLogger.LogQuestion(text)
+	}
 	log.Debugf("[bridge] sending to tmux: %q", log.Truncate(text, 80))
 	b.termMu.RLock()
 	term := b.term
@@ -601,6 +613,9 @@ func (b *Bridge) captureAndSend(ctx context.Context) bool {
 		}
 		hasDiff = true
 		log.Infof("[bridge] captureAndSend diff len=%d for receiver=%s", len(diff), key.id)
+		if b.dialogLogger != nil {
+			b.dialogLogger.LogAnswer(diff)
+		}
 
 		// Send to the same receiver serially so newer diffs cannot overtake older ones.
 		state.sendMu.Lock()
@@ -632,6 +647,9 @@ func (b *Bridge) Close() {
 	b.closeOnce.Do(func() {
 		// 只关闭 bot，保留 tmux session 让用户可以重新 attach
 		b.messenger.Close()
+		if b.dialogLogger != nil {
+			b.dialogLogger.Close()
+		}
 	})
 }
 
