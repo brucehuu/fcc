@@ -1,6 +1,6 @@
 # fcc
 
-**Feishu Connect for Claude / Codex**
+**Feishu Connect To Claude / Codex**
 
 本机终端与飞书的双向实时桥接服务。在本地运行，将终端输出实时推送到飞书，并将飞书私聊/群消息透传给终端进程，实现通过手机飞书与 Claude Code、Codex、Aider 等 AI 编程工具持续交互。
 
