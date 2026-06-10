@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 
 	"fcc/internal/bridge"
@@ -52,6 +54,69 @@ func runFirstRunSetup() error {
 	return cmd.Run()
 }
 
+func resolveWorkDir(args []string) (string, error) {
+	if len(args) > 0 {
+		workDir, err := filepath.Abs(args[0])
+		if err != nil {
+			return "", fmt.Errorf("resolve working directory: %w", err)
+		}
+		if st, err := os.Stat(workDir); err != nil || !st.IsDir() {
+			return "", fmt.Errorf("invalid working directory: %s", workDir)
+		}
+		return workDir, nil
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("get working directory: %w", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return cwd, nil
+	}
+	home, _ := os.UserHomeDir()
+	return chooseDefaultWorkDir(cwd, exe, home), nil
+}
+
+func chooseDefaultWorkDir(cwd, exePath, home string) string {
+	exeDir := filepath.Clean(filepath.Dir(exePath))
+	if exeDir == "." || exeDir == string(filepath.Separator) {
+		return cwd
+	}
+	if isGlobalBinDir(exeDir, home) || isTempDir(exeDir) {
+		return cwd
+	}
+	return exeDir
+}
+
+func isGlobalBinDir(dir, home string) bool {
+	dir = filepath.Clean(dir)
+	globalDirs := []string{
+		"/bin",
+		"/sbin",
+		"/usr/bin",
+		"/usr/sbin",
+		"/usr/local/bin",
+		"/opt/homebrew/bin",
+	}
+	if home != "" {
+		globalDirs = append(globalDirs, filepath.Join(home, ".local", "bin"))
+	}
+	for _, globalDir := range globalDirs {
+		if dir == filepath.Clean(globalDir) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTempDir(dir string) bool {
+	tmp := filepath.Clean(os.TempDir())
+	dir = filepath.Clean(dir)
+	rel, err := filepath.Rel(tmp, dir)
+	return err == nil && rel != "." && !strings.HasPrefix(rel, "..")
+}
+
 func main() {
 	// --config-window / --first-run 模式：helper 子进程跑 webview 配置窗口。
 	// 需要在 Dock 显示 fcc 图标，所以提前处理图标并传给 RunConfigWindow。
@@ -76,21 +141,6 @@ func main() {
 		return
 	}
 
-	// 每次正常启动都先杀干净旧进程（主进程 + watchdog），然后重新启动
-	log.SetLevel("info")
-	watchdog.Reset()
-
-	// macOS 上尽早初始化 NSApp：菜单栏 app 模式（不显示 Dock 图标）。
-	// 必须在 systray.Run 之前调用。
-	tray.SetupMainApp()
-
-	// 给 fcc 可执行文件自身设置 Finder 图标（幂等，失败不阻塞启动）。
-	if exe, err := os.Executable(); err == nil {
-		if err := tray.SetFinderIcon(exe, processIcon(appIconPNG, 15)); err != nil {
-			log.Debugf("[main] set finder icon: %v", err)
-		}
-	}
-
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s [options] [workdir]\n\n", os.Args[0])
 		fmt.Fprintf(os.Stderr, "fcc - 本机终端与飞书的双向实时桥接服务\n\n")
@@ -110,6 +160,32 @@ func main() {
 	if showVersion {
 		fmt.Printf("fcc %s\n", version)
 		os.Exit(0)
+	}
+
+	// 解析命令行参数：可选的项目路径。没有显式路径时，用启动位置推导默认工作目录。
+	workDir, err := resolveWorkDir(flag.Args())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := os.Chdir(workDir); err != nil {
+		fmt.Fprintf(os.Stderr, "change working directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 每次正常启动都先杀干净旧进程（主进程 + watchdog），然后重新启动
+	log.SetLevel("info")
+	watchdog.Reset()
+
+	// macOS 上尽早初始化 NSApp：菜单栏 app 模式（不显示 Dock 图标）。
+	// 必须在 systray.Run 之前调用。
+	tray.SetupMainApp()
+
+	// 给 fcc 可执行文件自身设置 Finder 图标（幂等，失败不阻塞启动）。
+	if exe, err := os.Executable(); err == nil {
+		if err := tray.SetFinderIcon(exe, processIcon(appIconPNG, 15)); err != nil {
+			log.Debugf("[main] set finder icon: %v", err)
+		}
 	}
 
 	cfg, err := config.Load(".env")
@@ -134,20 +210,8 @@ func main() {
 		log.Warnf("[main] fork watchdog: %v", err)
 	}
 
-	// 解析命令行参数：可选的项目路径
-	workDir := ""
-	if args := flag.Args(); len(args) > 0 {
-		workDir = args[0]
-		if st, err := os.Stat(workDir); err != nil || !st.IsDir() {
-			fmt.Fprintf(os.Stderr, "invalid working directory: %s\n", workDir)
-			os.Exit(1)
-		}
-	}
-
 	log.Infof("[main] starting fcc with command: %s", cfg.Command)
-	if workDir != "" {
-		log.Infof("[main] working directory: %s", workDir)
-	}
+	log.Infof("[main] working directory: %s", workDir)
 
 	// 设置 watchdog 检查间隔
 	watchdog.SetCheckInterval(cfg.WatchdogCheckInterval)
