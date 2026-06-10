@@ -48,5 +48,20 @@ mv "$TMPDIR/$ASSET" "$INSTALL_DIR/fcc"
 
 echo ""
 echo "fcc installed to $INSTALL_DIR/fcc"
+
+if [ "$INSTALL_DIR" = "$HOME/.local/bin" ]; then
+    case ":$PATH:" in
+        *":$INSTALL_DIR:"*) ;;
+        *)
+            echo ""
+            echo "NOTE: $INSTALL_DIR is not in your PATH."
+            echo "Add it to your shell profile:"
+            echo ""
+            echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+            echo ""
+            ;;
+    esac
+fi
+
 echo ""
 echo "Run 'fcc' to start. First run will open a config window."

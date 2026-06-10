@@ -160,10 +160,16 @@ CODEX_QUEUE_MODE=queue   # 排队模式：新消息自动排队
 | 配置项 | 默认 | 说明 |
 |--------|------|------|
 | `CAPTURE_INTERVAL` | `3s` | 终端屏幕捕获间隔，值越小越实时但 CPU 占用越高 |
+| `CAPTURE_INTERVAL_MIN` | `500ms` | 自适应捕获的最小间隔 |
+| `CAPTURE_INTERVAL_MAX` | `60s` | 自适应捕获的最大间隔 |
 | `SEND_TIMEOUT` | `10s` | 单条消息发送超时 |
 | `SEND_RETRIES` | `3` | 发送失败重试次数 |
 | `TMUX_HISTORY_LINES` | `2000` | tmux 历史缓冲区行数 |
 | `LOG_LEVEL` | `info` | 日志级别：`debug` / `info` / `warn` / `error` |
+| `NOISE_PATTERNS` | `fluttering,nesting,thinking` | 噪音过滤关键词（逗号分隔） |
+| `WATCHDOG_CHECK_INTERVAL` | `6s` | 进程守护检查间隔 |
+| `INTERRUPT_DEBOUNCE` | `500ms` | 中断命令防抖间隔 |
+| `TARGET_NAME` | 空 | 飞书账号名（用于配置窗口的测试消息功能） |
 
 ## 自动更新
 
@@ -175,6 +181,18 @@ fcc 启动后会自动在后台检查 GitHub Release 新版本（每天一次）
 - 也可手动点击 **Check for Updates** 立即检查
 
 更新替换后，watchdog 会自动重启 fcc 到新版本。
+
+## 对话日志
+
+fcc 会自动将飞书与终端之间的对话记录保存到 `log/` 目录下，按小时归档：
+
+```
+log/
+├── fcc.log              # 运行日志
+└── dialog-2025061014.log  # 对话日志（按小时轮转）
+```
+
+对话日志记录每条飞书消息和终端回复，方便回溯和审查。设置 `LOG_LEVEL=debug` 可获得更详细的消息内容。
 
 ## 常见问题
 
@@ -215,6 +233,8 @@ fcc/
 ├── internal/
 │   ├── config/config.go             # 配置读取
 │   ├── bot/bot.go                   # 飞书 WebSocket + 消息收发
+│   ├── log/log.go                   # 日志模块
+│   ├── dialog/logger.go             # 飞书对话日志（按小时归档）
 │   ├── terminal/tmux.go             # tmux 封装
 │   ├── bridge/                      # 桥接逻辑
 │   │   ├── bridge.go                # 核心逻辑
@@ -236,6 +256,8 @@ fcc/
 
 - [larksuite/oapi-sdk-go/v3](https://github.com/larksuite/oapi-sdk-go) - 飞书官方 Go SDK
 - [joho/godotenv](https://github.com/joho/godotenv) - .env 文件加载
+- [getlantern/systray](https://github.com/getlantern/systray) - macOS 菜单栏图标
+- [webview/webview_go](https://github.com/webview/webview_go) - 配置窗口（基于 WKWebView）
 
 ## 开发
 
