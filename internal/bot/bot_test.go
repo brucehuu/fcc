@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
 func TestParseMarkdownTableCells(t *testing.T) {
@@ -531,6 +533,302 @@ func TestBuildInteractiveCardUsesMarkdownComponent(t *testing.T) {
 	}
 	if elements[0]["content"] != "```json\n{}\n```" {
 		t.Fatalf("content = %v", elements[0]["content"])
+	}
+}
+
+// --- handleEvent tests ---
+
+func strPtr(s string) *string { return &s }
+
+func TestHandleEventNilEvent(t *testing.T) {
+	var called bool
+	b := New("test-id", "test-secret", func(_, _, _, _ string) { called = true }, 3, 0, 0)
+
+	err := b.handleEvent(context.Background(), &larkim.P2MessageReceiveV1{})
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if called {
+		t.Error("onMessage should not be called for nil event")
+	}
+}
+
+func TestHandleEventNilMessage(t *testing.T) {
+	var called bool
+	b := New("test-id", "test-secret", func(_, _, _, _ string) { called = true }, 3, 0, 0)
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{},
+	}
+	err := b.handleEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if called {
+		t.Error("onMessage should not be called for nil message")
+	}
+}
+
+func TestHandleEventUnsupportedChatType(t *testing.T) {
+	var called bool
+	b := New("test-id", "test-secret", func(_, _, _, _ string) { called = true }, 3, 0, 0)
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Message: &larkim.EventMessage{
+				ChatType: strPtr("topic_group"),
+				MessageType: strPtr("text"),
+				Content: strPtr(`{"text":"hello"}`),
+			},
+		},
+	}
+	err := b.handleEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if called {
+		t.Error("onMessage should not be called for unsupported chat_type")
+	}
+}
+
+func TestHandleEventUnsupportedMsgType(t *testing.T) {
+	var called bool
+	b := New("test-id", "test-secret", func(_, _, _, _ string) { called = true }, 3, 0, 0)
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Message: &larkim.EventMessage{
+				ChatType: strPtr("p2p"),
+				MessageType: strPtr("file"),
+				Content: strPtr(`{}`),
+			},
+		},
+	}
+	err := b.handleEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if called {
+		t.Error("onMessage should not be called for unsupported msg_type")
+	}
+}
+
+func TestHandleEventNilSenderWithKnownBotID(t *testing.T) {
+	var called bool
+	b := New("test-id", "test-secret", func(_, _, _, _ string) { called = true }, 3, 0, 0)
+	b.botOpenID = "bot-123"
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Message: &larkim.EventMessage{
+				ChatType: strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content: strPtr(`{"text":"hello"}`),
+			},
+		},
+	}
+	err := b.handleEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if called {
+		t.Error("onMessage should not be called when sender is nil and botID is known")
+	}
+}
+
+func TestHandleEventNonUserSender(t *testing.T) {
+	var called bool
+	b := New("test-id", "test-secret", func(_, _, _, _ string) { called = true }, 3, 0, 0)
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Message: &larkim.EventMessage{
+				ChatType: strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content: strPtr(`{"text":"hello"}`),
+			},
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("app"),
+			},
+		},
+	}
+	err := b.handleEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if called {
+		t.Error("onMessage should not be called for non-user sender")
+	}
+}
+
+func TestHandleEventSelfMessage(t *testing.T) {
+	var called bool
+	b := New("test-id", "test-secret", func(_, _, _, _ string) { called = true }, 3, 0, 0)
+	b.botOpenID = "bot-123"
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Message: &larkim.EventMessage{
+				ChatType: strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content: strPtr(`{"text":"hello"}`),
+			},
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId: &larkim.UserId{
+					OpenId: strPtr("bot-123"),
+				},
+			},
+		},
+	}
+	err := b.handleEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if called {
+		t.Error("onMessage should not be called for self message")
+	}
+}
+
+func TestHandleEventP2PTextMessage(t *testing.T) {
+	var gotChatType, gotOpenID, gotChatID, gotText string
+	b := New("test-id", "test-secret", func(ct, oid, cid, text string) {
+		gotChatType = ct
+		gotOpenID = oid
+		gotChatID = cid
+		gotText = text
+	}, 3, 0, 0)
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Message: &larkim.EventMessage{
+				ChatType: strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content: strPtr(`{"text":"hello world"}`),
+				ChatId: strPtr("chat-123"),
+			},
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId: &larkim.UserId{
+					OpenId: strPtr("user-456"),
+				},
+			},
+		},
+	}
+	err := b.handleEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if gotChatType != "p2p" {
+		t.Errorf("chatType = %q, want p2p", gotChatType)
+	}
+	if gotOpenID != "user-456" {
+		t.Errorf("openID = %q, want user-456", gotOpenID)
+	}
+	if gotChatID != "chat-123" {
+		t.Errorf("chatID = %q, want chat-123", gotChatID)
+	}
+	if gotText != "hello world" {
+		t.Errorf("text = %q, want hello world", gotText)
+	}
+}
+
+func TestHandleEventGroupTextMessage(t *testing.T) {
+	var gotChatType, gotChatID string
+	b := New("test-id", "test-secret", func(ct, _, cid, _ string) {
+		gotChatType = ct
+		gotChatID = cid
+	}, 3, 0, 0)
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Message: &larkim.EventMessage{
+				ChatType: strPtr("group"),
+				MessageType: strPtr("text"),
+				Content: strPtr(`{"text":"group msg"}`),
+				ChatId: strPtr("group-789"),
+			},
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId: &larkim.UserId{
+					OpenId: strPtr("user-111"),
+				},
+			},
+		},
+	}
+	err := b.handleEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if gotChatType != "group" {
+		t.Errorf("chatType = %q, want group", gotChatType)
+	}
+	if gotChatID != "group-789" {
+		t.Errorf("chatID = %q, want group-789", gotChatID)
+	}
+}
+
+func TestHandleEventEmptyParsedText(t *testing.T) {
+	var called bool
+	b := New("test-id", "test-secret", func(_, _, _, _ string) { called = true }, 3, 0, 0)
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Message: &larkim.EventMessage{
+				ChatType: strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content: strPtr(`{"text":""}`),
+			},
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId: &larkim.UserId{
+					OpenId: strPtr("user-456"),
+				},
+			},
+		},
+	}
+	err := b.handleEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if called {
+		t.Error("onMessage should not be called for empty parsed text")
+	}
+}
+
+func TestHandleEventParseError(t *testing.T) {
+	var called bool
+	b := New("test-id", "test-secret", func(_, _, _, _ string) { called = true }, 3, 0, 0)
+
+	event := &larkim.P2MessageReceiveV1{
+		Event: &larkim.P2MessageReceiveV1Data{
+			Message: &larkim.EventMessage{
+				ChatType: strPtr("p2p"),
+				MessageType: strPtr("text"),
+				Content: strPtr(`not json`),
+			},
+			Sender: &larkim.EventSender{
+				SenderType: strPtr("user"),
+				SenderId: &larkim.UserId{
+					OpenId: strPtr("user-456"),
+				},
+			},
+		},
+	}
+	err := b.handleEvent(context.Background(), event)
+	if err != nil {
+		t.Fatalf("handleEvent() error = %v", err)
+	}
+	if called {
+		t.Error("onMessage should not be called when parse fails")
+	}
+}
+
+func TestSetImageDir(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+	b.SetImageDir("/tmp/images")
+	if b.imageDir != "/tmp/images" {
+		t.Errorf("imageDir = %q, want /tmp/images", b.imageDir)
 	}
 }
 
