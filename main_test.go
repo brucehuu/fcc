@@ -112,3 +112,94 @@ func TestProcessIcon(t *testing.T) {
 		t.Fatal("processIcon with padding returned empty data")
 	}
 }
+
+func TestResolveWorkDirExplicitPath(t *testing.T) {
+	dir := t.TempDir()
+	got, err := resolveWorkDir([]string{dir})
+	if err != nil {
+		t.Fatalf("resolveWorkDir() error = %v", err)
+	}
+	if got != dir {
+		t.Errorf("resolveWorkDir() = %q, want %q", got, dir)
+	}
+}
+
+func TestResolveWorkDirExplicitRelativePath(t *testing.T) {
+	dir := t.TempDir()
+	// Create a subdirectory to use as relative path.
+	if err := os.Mkdir(filepath.Join(dir, "project"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Change to parent dir so relative path works.
+	origDir, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(origDir)
+
+	got, err := resolveWorkDir([]string{"project"})
+	if err != nil {
+		t.Fatalf("resolveWorkDir() error = %v", err)
+	}
+	// Should resolve to an absolute path ending with "project".
+	if !filepath.IsAbs(got) {
+		t.Errorf("resolveWorkDir() = %q, want absolute path", got)
+	}
+	if filepath.Base(got) != "project" {
+		t.Errorf("resolveWorkDir() = %q, want base name 'project'", got)
+	}
+	// Should be a valid directory.
+	if st, err := os.Stat(got); err != nil || !st.IsDir() {
+		t.Errorf("resolved path %q is not a valid directory", got)
+	}
+}
+
+func TestResolveWorkDirInvalidPath(t *testing.T) {
+	_, err := resolveWorkDir([]string{"/nonexistent/path/that/does/not/exist"})
+	if err == nil {
+		t.Fatal("expected error for nonexistent path")
+	}
+}
+
+func TestResolveWorkDirFileNotDir(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file.txt")
+	os.WriteFile(file, []byte("hello"), 0644)
+
+	_, err := resolveWorkDir([]string{file})
+	if err == nil {
+		t.Fatal("expected error for file path (not directory)")
+	}
+}
+
+func TestResolveWorkDirNoArgs(t *testing.T) {
+	// Without args, should fall back to cwd/exe-based logic.
+	got, err := resolveWorkDir(nil)
+	if err != nil {
+		t.Fatalf("resolveWorkDir(nil) error = %v", err)
+	}
+	if got == "" {
+		t.Fatal("resolveWorkDir(nil) returned empty string")
+	}
+}
+
+func TestResolveWorkDirEmptyArgs(t *testing.T) {
+	got, err := resolveWorkDir([]string{})
+	if err != nil {
+		t.Fatalf("resolveWorkDir([]) error = %v", err)
+	}
+	if got == "" {
+		t.Fatal("resolveWorkDir([]) returned empty string")
+	}
+}
+
+func TestIsTempDir(t *testing.T) {
+	tmpDir := os.TempDir()
+	// A subdirectory of temp dir should be detected as temp.
+	sub := filepath.Join(tmpDir, "go-build123")
+	if !isTempDir(sub) {
+		t.Errorf("isTempDir(%q) = false, want true", sub)
+	}
+	// A regular directory should not be temp.
+	if isTempDir("/usr/local/bin") {
+		t.Error("isTempDir(/usr/local/bin) = true, want false")
+	}
+}

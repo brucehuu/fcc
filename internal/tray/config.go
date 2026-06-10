@@ -23,6 +23,8 @@ import (
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
+var feishuBaseURL = "https://open.feishu.cn"
+
 var (
 	configMu      sync.Mutex
 	configOpen    bool
@@ -880,7 +882,7 @@ func getTenantAccessToken(appID, appSecret string) (string, error) {
 		"app_id":     appID,
 		"app_secret": appSecret,
 	})
-	resp, err := httpClient.Post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal", "application/json", bytes.NewReader(body))
+	resp, err := httpClient.Post(feishuBaseURL+"/open-apis/auth/v3/tenant_access_token/internal", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}
@@ -910,7 +912,7 @@ func getAllChats(token string) ([]string, error) {
 	var chatIDs []string
 	pageToken := ""
 	for {
-		url := "https://open.feishu.cn/open-apis/im/v1/chats?page_size=100"
+		url := feishuBaseURL + "/open-apis/im/v1/chats?page_size=100"
 		if pageToken != "" {
 			url += "&page_token=" + pageToken
 		}
@@ -955,7 +957,7 @@ func getChatMembers(token, chatID string) ([]memberInfo, error) {
 	var members []memberInfo
 	pageToken := ""
 	for {
-		url := fmt.Sprintf("https://open.feishu.cn/open-apis/im/v1/chats/%s/members?page_size=100", chatID)
+		url := fmt.Sprintf(feishuBaseURL+"/open-apis/im/v1/chats/%s/members?page_size=100", chatID)
 		if pageToken != "" {
 			url += "&page_token=" + pageToken
 		}
@@ -1003,7 +1005,7 @@ func sendTestMessage(token, openID string) error {
 		"content":    `{"text":"您好，这是FCC发送的测试消息！"}`,
 		"msg_type":   "text",
 	})
-	req, _ := http.NewRequest("POST", "https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=open_id", bytes.NewReader(body))
+	req, _ := http.NewRequest("POST", feishuBaseURL+"/open-apis/im/v1/messages?receive_id_type=open_id", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
