@@ -253,8 +253,6 @@ func main() {
 		watchdog.Stop()
 		os.Exit(1)
 	}
-	defer b.Close()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -364,13 +362,12 @@ func main() {
 	})
 
 	// NSApp 已返回，做最终清理
-	b.Close()
-	b.LogMetrics()
-
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer shutdownCancel()
 	if err := b.Shutdown(shutdownCtx); err != nil {
 		log.Warnf("[main] shutdown incomplete: %v", err)
 	}
+	b.LogMetrics()
+	b.Close()
 	// tmux session 保留：用户可以重新 attach，也可以手动 kill
 }
