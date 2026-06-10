@@ -116,3 +116,24 @@ func TestAIToolConfigUpdates(t *testing.T) {
 		})
 	}
 }
+
+func TestDetectToolWithExtension(t *testing.T) {
+	// Windows-style path with .exe extension.
+	if got := detectTool(`C:\\Program Files\\claude.exe`); got != "claude" {
+		t.Errorf("detectTool(claude.exe) = %q, want claude", got)
+	}
+}
+
+func TestDetectToolPathWithDot(t *testing.T) {
+	// Path containing dots but not as extension.
+	if got := detectTool("/opt/node.v20/bin/claude"); got != "claude" {
+		t.Errorf("detectTool(...) = %q, want claude", got)
+	}
+}
+
+func TestCommandFromToolDefaultWithCommand(t *testing.T) {
+	// Unknown tool with non-empty command falls back to command.
+	if got := commandFromTool("aider", "aider --model sonnet"); got != "aider --model sonnet" {
+		t.Errorf("commandFromTool() = %q, want aider --model sonnet", got)
+	}
+}

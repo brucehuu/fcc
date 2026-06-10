@@ -533,3 +533,40 @@ func TestBuildInteractiveCardUsesMarkdownComponent(t *testing.T) {
 		t.Fatalf("content = %v", elements[0]["content"])
 	}
 }
+
+func TestParseMessagePostTextOnly(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+
+	// Post message with text only, no images.
+	content := `{"title":"test","content":[[{"tag":"text","text":"hello from post"}]]}`
+	got, err := b.parseMessage(nil, "post", content, nil)
+	if err != nil {
+		t.Fatalf("parseMessage() error = %v", err)
+	}
+	if got != "hello from post" {
+		t.Errorf("parseMessage() = %q, want %q", got, "hello from post")
+	}
+}
+
+func TestParseMessagePostWithLocale(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+
+	// Post message wrapped in zh_cn locale.
+	content := `{"zh_cn":{"title":"test","content":[[{"tag":"text","text":"locale text"}]]}}`
+	got, err := b.parseMessage(nil, "post", content, nil)
+	if err != nil {
+		t.Fatalf("parseMessage() error = %v", err)
+	}
+	if got != "locale text" {
+		t.Errorf("parseMessage() = %q, want %q", got, "locale text")
+	}
+}
+
+func TestParseMessagePostInvalidJSON(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+
+	_, err := b.parseMessage(nil, "post", `not json`, nil)
+	if err == nil {
+		t.Error("parseMessage() expected error for invalid JSON")
+	}
+}

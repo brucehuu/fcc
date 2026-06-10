@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -53,5 +54,61 @@ func TestChooseDefaultWorkDirIgnoresTempGoRunBinary(t *testing.T) {
 	exePath := filepath.Join(t.TempDir(), "go-build123", "fcc")
 	if got := chooseDefaultWorkDir(cwd, exePath, "/Users/tester"); got != cwd {
 		t.Fatalf("chooseDefaultWorkDir() = %q, want %q", got, cwd)
+	}
+}
+
+func TestIsGlobalBinDir(t *testing.T) {
+	home := "/Users/tester"
+	tests := []struct {
+		dir  string
+		want bool
+	}{
+		{"/usr/local/bin", true},
+		{"/usr/local/bin/", true},
+		{"/opt/homebrew/bin", true},
+		{"/bin", true},
+		{"/sbin", true},
+		{"/usr/bin", true},
+		{"/usr/sbin", true},
+		{"/Users/tester/.local/bin", true},
+		{"/Users/tester/.local/bin/", true},
+		{"/Users/tester/code/fcc", false},
+		{"/tmp", false},
+		{".", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.dir, func(t *testing.T) {
+			if got := isGlobalBinDir(tt.dir, home); got != tt.want {
+				t.Errorf("isGlobalBinDir(%q) = %v, want %v", tt.dir, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsGlobalBinDirWithoutHome(t *testing.T) {
+	// Without home set, .local/bin should not match.
+	if isGlobalBinDir("/Users/tester/.local/bin", "") {
+		t.Error("isGlobalBinDir(.local/bin, empty home) = true, want false")
+	}
+}
+
+func TestProcessIcon(t *testing.T) {
+	// Read the real icon file.
+	data, err := os.ReadFile("assets/fcc-logo.png")
+	if err != nil {
+		t.Skipf("cannot read icon file: %v", err)
+	}
+
+	result := processIcon(data, 0)
+	if len(result) == 0 {
+		t.Fatal("processIcon returned empty data")
+	}
+
+	// With padding should produce different size.
+	padded := processIcon(data, 20)
+	if len(padded) == 0 {
+		t.Fatal("processIcon with padding returned empty data")
 	}
 }
