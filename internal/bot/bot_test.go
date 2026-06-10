@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	larkcore "github.com/larksuite/oapi-sdk-go/v3/core"
 	larkim "github.com/larksuite/oapi-sdk-go/v3/service/im/v1"
 )
 
@@ -867,4 +868,172 @@ func TestParseMessagePostInvalidJSON(t *testing.T) {
 	if err == nil {
 		t.Error("parseMessage() expected error for invalid JSON")
 	}
+}
+
+// --- downloadImage and fetchBotOpenID tests via testGet injection ---
+
+func TestDownloadImageSuccess(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+	b.testGet = func(_ context.Context, path string, _ interface{}, _ larkcore.AccessTokenType, _ ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error) {
+		return &larkcore.ApiResp{
+			StatusCode: 200,
+			RawBody:    []byte("fake image data"),
+		}, nil
+	}
+
+	path, err := b.downloadImage(context.Background(), "msg-123", "img-key")
+	if err != nil {
+		t.Fatalf("downloadImage() error = %v", err)
+	}
+	if path == "" {
+		t.Fatal("downloadImage() returned empty path")
+	}
+
+	// Verify file was written.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+	if string(data) != "fake image data" {
+		t.Errorf("file content = %q, want fake image data", string(data))
+	}
+
+	// Clean up.
+	os.RemoveAll(".fcc")
+}
+
+func TestDownloadImageStatusError(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+	b.testGet = func(_ context.Context, path string, _ interface{}, _ larkcore.AccessTokenType, _ ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error) {
+		return &larkcore.ApiResp{
+			StatusCode: 404,
+			RawBody:    []byte("not found"),
+		}, nil
+	}
+
+	_, err := b.downloadImage(context.Background(), "msg-123", "img-key")
+	if err == nil {
+		t.Fatal("downloadImage() expected error for 404")
+	}
+}
+
+func TestDownloadImageTooLarge(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+	b.testGet = func(_ context.Context, path string, _ interface{}, _ larkcore.AccessTokenType, _ ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error) {
+		return &larkcore.ApiResp{
+			StatusCode: 200,
+			RawBody:    make([]byte, 11*1024*1024), // 11MB > 10MB limit
+		}, nil
+	}
+
+	_, err := b.downloadImage(context.Background(), "msg-123", "img-key")
+	if err == nil {
+		t.Fatal("downloadImage() expected error for oversized image")
+	}
+}
+
+func TestDownloadImageHTTPError(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+	b.testGet = func(_ context.Context, path string, _ interface{}, _ larkcore.AccessTokenType, _ ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error) {
+		return nil, fmt.Errorf("network error")
+	}
+
+	_, err := b.downloadImage(context.Background(), "msg-123", "img-key")
+	if err == nil {
+		t.Fatal("downloadImage() expected error for network failure")
+	}
+}
+
+func TestFetchBotOpenIDSuccess(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+	b.testGet = func(_ context.Context, path string, _ interface{}, _ larkcore.AccessTokenType, _ ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error) {
+		return &larkcore.ApiResp{
+			StatusCode: 200,
+			RawBody:    []byte(`{"code":0,"bot":{"open_id":"bot-abc"}}`),
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := b.fetchBotOpenID(ctx)
+	if err != nil {
+		t.Fatalf("fetchBotOpenID() error = %v", err)
+	}
+	if b.botOpenID != "bot-abc" {
+		t.Errorf("botOpenID = %q, want bot-abc", b.botOpenID)
+	}
+}
+
+func TestFetchBotOpenIDErrorResponse(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+	b.testGet = func(_ context.Context, path string, _ interface{}, _ larkcore.AccessTokenType, _ ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error) {
+		return nil, fmt.Errorf("api error")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := b.fetchBotOpenID(ctx)
+	if err == nil {
+		t.Fatal("fetchBotOpenID() expected error")
+	}
+}
+
+func TestFetchBotOpenIDNonZeroCode(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+	b.testGet = func(_ context.Context, path string, _ interface{}, _ larkcore.AccessTokenType, _ ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error) {
+		return &larkcore.ApiResp{
+			StatusCode: 200,
+			RawBody:    []byte(`{"code":1}`),
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := b.fetchBotOpenID(ctx)
+	if err == nil {
+		t.Fatal("fetchBotOpenID() expected error for non-zero code")
+	}
+}
+
+func TestFetchBotOpenIDInvalidJSON(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+	b.testGet = func(_ context.Context, path string, _ interface{}, _ larkcore.AccessTokenType, _ ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error) {
+		return &larkcore.ApiResp{
+			StatusCode: 200,
+			RawBody:    []byte(`not json`),
+		}, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := b.fetchBotOpenID(ctx)
+	if err == nil {
+		t.Fatal("fetchBotOpenID() expected error for invalid JSON")
+	}
+}
+
+func TestParseMessagePostImageOnly(t *testing.T) {
+	b := New("test-id", "test-secret", nil, 3, 0, 0)
+	b.testGet = func(_ context.Context, path string, _ interface{}, _ larkcore.AccessTokenType, _ ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error) {
+		return &larkcore.ApiResp{
+			StatusCode: 200,
+			RawBody:    []byte("fake image"),
+		}, nil
+	}
+
+	content := `{"title":"test","content":[[{"tag":"img","image_key":"img1"}]]}`
+	msgID := "msg-123"
+	got, err := b.parseMessage(context.Background(), "post", content, &msgID)
+	if err != nil {
+		t.Fatalf("parseMessage() error = %v", err)
+	}
+	if got == "" {
+		t.Error("parseMessage() should return image path for post with image")
+	}
+
+	os.RemoveAll(".fcc")
 }

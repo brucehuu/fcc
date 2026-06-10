@@ -31,6 +31,9 @@ type Bot struct {
 	retryMaxBackoff time.Duration
 	closeOnce       sync.Once
 	imageDir        string
+
+	// testGet is an injectable replacement for client.Get, used only in tests.
+	testGet func(ctx context.Context, path string, query interface{}, accessTokenType larkcore.AccessTokenType, options ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error)
 }
 
 type TextContent struct {
@@ -282,7 +285,7 @@ func (b *Bot) downloadImage(ctx context.Context, messageID, imageKey string) (st
 
 	path := fmt.Sprintf("/open-apis/im/v1/messages/%s/resources/%s?type=image", messageID, imageKey)
 	log.Debugf("[bot] downloadImage: GET %s", path)
-	resp, err := b.client.Get(ctx, path, nil, larkcore.AccessTokenTypeTenant)
+	resp, err := b.doGet(ctx, path, nil, larkcore.AccessTokenTypeTenant)
 	if err != nil {
 		return "", fmt.Errorf("download image failed: %w", err)
 	}
@@ -363,10 +366,17 @@ func (b *Bot) CleanupOldImages(maxAge time.Duration) error {
 	return nil
 }
 
+func (b *Bot) doGet(ctx context.Context, path string, query interface{}, accessTokenType larkcore.AccessTokenType, options ...larkcore.RequestOptionFunc) (*larkcore.ApiResp, error) {
+	if b.testGet != nil {
+		return b.testGet(ctx, path, query, accessTokenType, options...)
+	}
+	return b.client.Get(ctx, path, query, accessTokenType, options...)
+}
+
 func (b *Bot) fetchBotOpenID(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	resp, err := b.client.Get(ctx, "/open-apis/bot/v3/info", nil, larkcore.AccessTokenTypeTenant)
+	resp, err := b.doGet(ctx, "/open-apis/bot/v3/info", nil, larkcore.AccessTokenTypeTenant)
 	if err != nil {
 		return fmt.Errorf("failed to fetch bot info: %w", err)
 	}

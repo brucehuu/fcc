@@ -26,6 +26,10 @@ type Updater struct {
 	downloadHTTPTimeout time.Duration
 	githubAPITimeout    time.Duration
 	stateCheckCooldown  time.Duration
+
+	// Injectable dependencies for testing.
+	fetchLatestFunc func(*http.Client) (*Release, error)
+	downloadFunc    func(*http.Client, string, string, string) (string, string, error)
 }
 
 // New creates an updater for the given current version.
@@ -58,6 +62,8 @@ func New(currentVersion string, firstCheckDelay, checkInterval, httpTimeout, dow
 		downloadHTTPTimeout: downloadHTTPTimeout,
 		githubAPITimeout:    githubAPITimeout,
 		stateCheckCooldown:  stateCheckCooldown,
+		fetchLatestFunc:     FetchLatest,
+		downloadFunc:        Download,
 	}
 }
 
@@ -118,7 +124,7 @@ func (u *Updater) checkNow() *State {
 
 	log.Info("[updater] checking for updates...")
 	githubClient := &http.Client{Timeout: u.githubAPITimeout}
-	rel, err := FetchLatest(githubClient)
+	rel, err := u.fetchLatestFunc(githubClient)
 	if err != nil {
 		log.Warnf("[updater] fetch latest: %v", err)
 		state.Status = StatusFailed
@@ -169,7 +175,7 @@ func (u *Updater) checkNow() *State {
 	}
 
 	downloadClient := &http.Client{Timeout: u.downloadHTTPTimeout}
-	binaryPath, checksum, err := Download(downloadClient, binaryURL, shaURL, latest)
+	binaryPath, checksum, err := u.downloadFunc(downloadClient, binaryURL, shaURL, latest)
 	if err != nil {
 		log.Warnf("[updater] download failed: %v", err)
 		state.Status = StatusFailed

@@ -1,6 +1,7 @@
 package watchdog
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -297,6 +298,279 @@ func TestStopWithValidPID(t *testing.T) {
 	// PID file should be removed.
 	if _, err := os.Stat(watchdogPidFile); !os.IsNotExist(err) {
 		t.Error("PID file should be removed after Stop()")
+	}
+}
+
+// --- RunWithContext tests ---
+
+func TestRunWithContextFCCNotRunning(t *testing.T) {
+	origWatchdogPid := watchdogPidFile
+	watchdogPidFile = t.TempDir() + "/watchdog.pid"
+	defer func() { watchdogPidFile = origWatchdogPid }()
+
+	origCheckInterval := checkInterval
+	checkInterval = 10 * time.Millisecond
+	defer func() { checkInterval = origCheckInterval }()
+
+	origIsFCC := isFCCRunningFunc
+	origIsTmux := isTmuxSessionRunningFunc
+	origStartFCC := startFCCFunc
+	defer func() {
+		isFCCRunningFunc = origIsFCC
+		isTmuxSessionRunningFunc = origIsTmux
+		startFCCFunc = origStartFCC
+	}()
+
+	startCalled := false
+	isFCCRunningFunc = func() bool { return false }
+	isTmuxSessionRunningFunc = func() bool { return true }
+	startFCCFunc = func() error {
+		startCalled = true
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	if err := RunWithContext(ctx); err != nil {
+		t.Fatalf("RunWithContext() error = %v", err)
+	}
+
+	if !startCalled {
+		t.Error("startFCCFunc should have been called")
+	}
+}
+
+func TestRunWithContextTmuxGone(t *testing.T) {
+	origWatchdogPid := watchdogPidFile
+	watchdogPidFile = t.TempDir() + "/watchdog.pid"
+	defer func() { watchdogPidFile = origWatchdogPid }()
+
+	origFCCPid := fccPidFile
+	fccPidFile = t.TempDir() + "/fcc.pid"
+	defer func() { fccPidFile = origFCCPid }()
+
+	origCheckInterval := checkInterval
+	checkInterval = 10 * time.Millisecond
+	defer func() { checkInterval = origCheckInterval }()
+
+	origIsFCC := isFCCRunningFunc
+	origIsTmux := isTmuxSessionRunningFunc
+	defer func() {
+		isFCCRunningFunc = origIsFCC
+		isTmuxSessionRunningFunc = origIsTmux
+	}()
+
+	isFCCRunningFunc = func() bool { return true }
+	isTmuxSessionRunningFunc = func() bool { return false }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	if err := RunWithContext(ctx); err != nil {
+		t.Fatalf("RunWithContext() error = %v", err)
+	}
+}
+
+func TestRunWithContextStartFCCError(t *testing.T) {
+	origWatchdogPid := watchdogPidFile
+	watchdogPidFile = t.TempDir() + "/watchdog.pid"
+	defer func() { watchdogPidFile = origWatchdogPid }()
+
+	origCheckInterval := checkInterval
+	checkInterval = 10 * time.Millisecond
+	defer func() { checkInterval = origCheckInterval }()
+
+	origIsFCC := isFCCRunningFunc
+	origStartFCC := startFCCFunc
+	defer func() {
+		isFCCRunningFunc = origIsFCC
+		startFCCFunc = origStartFCC
+	}()
+
+	isFCCRunningFunc = func() bool { return false }
+	startFCCFunc = func() error { return fmt.Errorf("start failed") }
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Should not return error even if startFCC fails.
+	if err := RunWithContext(ctx); err != nil {
+		t.Fatalf("RunWithContext() error = %v", err)
+	}
+}
+
+func TestRunWithContextWritePIDError(t *testing.T) {
+	// Use a non-existent directory to force write failure.
+	origWatchdogPid := watchdogPidFile
+	watchdogPidFile = "/nonexistent/dir/watchdog.pid"
+	defer func() { watchdogPidFile = origWatchdogPid }()
+
+	if err := RunWithContext(context.Background()); err == nil {
+		t.Fatal("RunWithContext() expected error")
+	}
+}
+
+// --- forkWatchdog tests ---
+
+func TestForkWatchdogSuccess(t *testing.T) {
+	origExec := execCommandFunc
+	defer func() { execCommandFunc = origExec }()
+
+	execCommandFunc = func(name string, arg ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
+
+	if err := forkWatchdog(); err != nil {
+		t.Fatalf("forkWatchdog() error = %v", err)
+	}
+}
+
+func TestForkWatchdogStartError(t *testing.T) {
+	origExec := execCommandFunc
+	defer func() { execCommandFunc = origExec }()
+
+	execCommandFunc = func(name string, arg ...string) *exec.Cmd {
+		return exec.Command("/nonexistent/path/to/binary")
+	}
+
+	if err := forkWatchdog(); err == nil {
+		t.Fatal("forkWatchdog() expected error")
+	}
+}
+
+// --- startFCC tests ---
+
+func TestStartFCCSuccess(t *testing.T) {
+	origExec := execCommandFunc
+	defer func() { execCommandFunc = origExec }()
+
+	execCommandFunc = func(name string, arg ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
+
+	if err := startFCC(); err != nil {
+		t.Fatalf("startFCC() error = %v", err)
+	}
+}
+
+func TestStartFCCTmuxKillError(t *testing.T) {
+	origExec := execCommandFunc
+	defer func() { execCommandFunc = origExec }()
+
+	execCommandFunc = func(name string, arg ...string) *exec.Cmd {
+		if len(arg) > 0 && arg[0] == "kill-session" {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+
+	if err := startFCC(); err != nil {
+		t.Fatalf("startFCC() error = %v, tmux kill error should be ignored", err)
+	}
+}
+
+func TestStartFCCStartError(t *testing.T) {
+	origExec := execCommandFunc
+	defer func() { execCommandFunc = origExec }()
+
+	execCommandFunc = func(name string, arg ...string) *exec.Cmd {
+		if len(arg) == 0 {
+			// The main fcc command
+			return exec.Command("/nonexistent/path")
+		}
+		return exec.Command("true")
+	}
+
+	if err := startFCC(); err == nil {
+		t.Fatal("startFCC() expected error")
+	}
+}
+
+// --- Reset tests ---
+
+func TestReset(t *testing.T) {
+	origWatchdogPid := watchdogPidFile
+	origFCCPid := fccPidFile
+	watchdogPidFile = t.TempDir() + "/watchdog.pid"
+	fccPidFile = t.TempDir() + "/fcc.pid"
+	defer func() {
+		watchdogPidFile = origWatchdogPid
+		fccPidFile = origFCCPid
+	}()
+
+	// Write PID files so killFromPIDFile has something to read.
+	os.WriteFile(watchdogPidFile, []byte("999999\n"), 0644)
+	os.WriteFile(fccPidFile, []byte("999998\n"), 0644)
+
+	origExec := execCommandFunc
+	defer func() { execCommandFunc = origExec }()
+
+	execCommandFunc = func(name string, arg ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
+
+	// Should not panic.
+	Reset()
+
+	// PID files should be removed.
+	if _, err := os.Stat(watchdogPidFile); !os.IsNotExist(err) {
+		t.Error("watchdog PID file should be removed after Reset()")
+	}
+	if _, err := os.Stat(fccPidFile); !os.IsNotExist(err) {
+		t.Error("fcc PID file should be removed after Reset()")
+	}
+}
+
+// --- ForkIfNeeded tests ---
+
+func TestForkIfNeededAcquireLock(t *testing.T) {
+	// Ensure isWatchdogRunning returns false so we go into the lock path.
+	origWatchdogPid := watchdogPidFile
+	watchdogPidFile = t.TempDir() + "/nonexistent.pid"
+	defer func() { watchdogPidFile = origWatchdogPid }()
+
+	origExec := execCommandFunc
+	defer func() { execCommandFunc = origExec }()
+
+	execCommandFunc = func(name string, arg ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
+
+	lockFile := "/tmp/fcc-watchdog.lock"
+	os.Remove(lockFile)
+	defer os.Remove(lockFile)
+
+	if err := ForkIfNeeded(); err != nil {
+		t.Fatalf("ForkIfNeeded() error = %v", err)
+	}
+}
+
+// --- isTmuxSessionRunning tests ---
+
+func TestIsTmuxSessionRunningTrue(t *testing.T) {
+	origExec := execCommandFunc
+	defer func() { execCommandFunc = origExec }()
+
+	execCommandFunc = func(name string, arg ...string) *exec.Cmd {
+		return exec.Command("true")
+	}
+
+	if !isTmuxSessionRunning() {
+		t.Error("isTmuxSessionRunning() = false, want true")
+	}
+}
+
+func TestIsTmuxSessionRunningFalse(t *testing.T) {
+	origExec := execCommandFunc
+	defer func() { execCommandFunc = origExec }()
+
+	execCommandFunc = func(name string, arg ...string) *exec.Cmd {
+		return exec.Command("false")
+	}
+
+	if isTmuxSessionRunning() {
+		t.Error("isTmuxSessionRunning() = true, want false")
 	}
 }
 

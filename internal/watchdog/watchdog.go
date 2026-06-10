@@ -1,6 +1,7 @@
 package watchdog
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,12 @@ var (
 	watchdogPidFile = "/tmp/fcc-watchdog.pid"
 	fccPidFile      = "/tmp/fcc.pid"
 	checkInterval   = 6 * time.Second
+
+	// Injectable dependencies for testing.
+	execCommandFunc          = exec.Command
+	isFCCRunningFunc         = isFCCRunning
+	isTmuxSessionRunningFunc = isTmuxSessionRunning
+	startFCCFunc             = startFCC
 )
 
 // SetCheckInterval 允许外部调整检查间隔（如从配置读取）。
@@ -57,6 +64,11 @@ func ForkIfNeeded() error {
 
 // Run 运行 watchdog 主循环。在 WATCHDOG=1 模式下调用。
 func Run() error {
+	return RunWithContext(context.Background())
+}
+
+// RunWithContext 运行 watchdog 主循环，支持通过 context 取消。
+func RunWithContext(ctx context.Context) error {
 	pidStr := fmt.Sprintf("%d", os.Getpid())
 
 	if err := os.WriteFile(watchdogPidFile, []byte(pidStr), 0644); err != nil {
@@ -75,29 +87,32 @@ func Run() error {
 	ticker := time.NewTicker(checkInterval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		fccRunning := isFCCRunning()
-		tmuxRunning := isTmuxSessionRunning()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			fccRunning := isFCCRunningFunc()
+			tmuxRunning := isTmuxSessionRunningFunc()
 
-		if !fccRunning {
-			log.Warn("[watchdog] fcc not running, restarting...")
-			if err := startFCC(); err != nil {
-				log.Errorf("[watchdog] restart failed: %v", err)
+			if !fccRunning {
+				log.Warn("[watchdog] fcc not running, restarting...")
+				if err := startFCCFunc(); err != nil {
+					log.Errorf("[watchdog] restart failed: %v", err)
+				}
+				continue
 			}
-			continue
-		}
 
-		if !tmuxRunning {
-			log.Warn("[watchdog] tmux session gone but fcc still alive, killing fcc to restart...")
-			killFromPIDFile(fccPidFile)
-			if err := os.Remove(fccPidFile); err != nil {
-				log.Debugf("[watchdog] remove fcc pid file: %v", err)
+			if !tmuxRunning {
+				log.Warn("[watchdog] tmux session gone but fcc still alive, killing fcc to restart...")
+				killFromPIDFile(fccPidFile)
+				if err := os.Remove(fccPidFile); err != nil {
+					log.Debugf("[watchdog] remove fcc pid file: %v", err)
+				}
+				// 下一轮循环会检测到 fcc 不在并重新启动
 			}
-			// 下一轮循环会检测到 fcc 不在并重新启动
 		}
 	}
-
-	return nil
 }
 
 // WriteFCCPID 写入 fcc 进程 PID 到文件。
@@ -137,7 +152,7 @@ func forkWatchdog() error {
 		return fmt.Errorf("get working dir failed: %w", err)
 	}
 
-	cmd := exec.Command(exe)
+	cmd := execCommandFunc(exe)
 	cmd.Dir = wd
 	cmd.Env = append(os.Environ(), "WATCHDOG=1")
 	cmd.Stdin = nil
@@ -171,7 +186,7 @@ func isFCCRunning() bool {
 }
 
 func isTmuxSessionRunning() bool {
-	out, err := exec.Command("tmux", "has-session", "-t", "fcc").CombinedOutput()
+	out, err := execCommandFunc("tmux", "has-session", "-t", "fcc").CombinedOutput()
 	if err != nil {
 		log.Debugf("[watchdog] tmux session check failed: %v, output: %s", err, string(out))
 		return false
@@ -202,11 +217,11 @@ func startFCC() error {
 	}
 
 	// 清理可能残留的 tmux 会话，否则 fcc 启动会因会话已存在而失败
-	if err := exec.Command("tmux", "kill-session", "-t", "fcc").Run(); err != nil {
+	if err := execCommandFunc("tmux", "kill-session", "-t", "fcc").Run(); err != nil {
 		log.Debugf("[watchdog] kill tmux session: %v", err)
 	}
 
-	cmd := exec.Command(exe)
+	cmd := execCommandFunc(exe)
 	cmd.Dir = wd
 	// 关键：必须去掉 WATCHDOG=1，否则启动的还是 watchdog 模式
 	cmd.Env = stripEnv(os.Environ(), "WATCHDOG")
@@ -270,13 +285,13 @@ func Reset() {
 
 	// 2. 兜底：杀掉从当前可执行文件路径启动的所有 fcc 进程（防止有漏网的）
 	if exe, err := os.Executable(); err == nil {
-		if err := exec.Command("pkill", "-9", "-f", exe).Run(); err != nil {
+		if err := execCommandFunc("pkill", "-9", "-f", exe).Run(); err != nil {
 			log.Debugf("[watchdog] pkill fallback: %v", err)
 		}
 	}
 
 	// 3. 清理残留的 tmux 会话
-	if err := exec.Command("tmux", "kill-session", "-t", "fcc").Run(); err != nil {
+	if err := execCommandFunc("tmux", "kill-session", "-t", "fcc").Run(); err != nil {
 		log.Debugf("[watchdog] kill tmux session: %v", err)
 	}
 

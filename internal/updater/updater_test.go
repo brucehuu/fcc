@@ -1,6 +1,8 @@
 package updater
 
 import (
+	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -222,5 +224,110 @@ func TestUpdaterPendingVersion(t *testing.T) {
 
 	if v := u.PendingVersion(); v != "1.2.3" {
 		t.Errorf("PendingVersion() = %q, want 1.2.3", v)
+	}
+}
+
+func TestCheckNowUpToDate(t *testing.T) {
+	u := New("1.0.0", 0, 0, 0, 0, 0, 0)
+	u.fetchLatestFunc = func(_ *http.Client) (*Release, error) {
+		return &Release{TagName: "v1.0.0"}, nil
+	}
+
+	state := u.checkNow()
+	if state.Status != StatusUpToDate {
+		t.Errorf("status = %q, want %q", state.Status, StatusUpToDate)
+	}
+	if state.LatestVersion != "1.0.0" {
+		t.Errorf("latestVersion = %q, want 1.0.0", state.LatestVersion)
+	}
+}
+
+func TestCheckNowNewVersion(t *testing.T) {
+	tmpDir := t.TempDir()
+	origHome := os.Getenv("HOME")
+	os.Setenv("HOME", tmpDir)
+	defer os.Setenv("HOME", origHome)
+
+	u := New("1.0.0", 0, 0, 0, 0, 0, 0)
+	u.fetchLatestFunc = func(_ *http.Client) (*Release, error) {
+		return &Release{TagName: "v2.0.0", Assets: []Asset{
+			{Name: "fcc-darwin-" + runtime.GOARCH, BrowserDownloadURL: "http://example.com/bin"},
+			{Name: "fcc-darwin-" + runtime.GOARCH + ".sha256", BrowserDownloadURL: "http://example.com/sha"},
+		}}, nil
+	}
+	u.downloadFunc = func(_ *http.Client, _, _, _ string) (string, string, error) {
+		return "/tmp/fcc-2.0.0", "abc123", nil
+	}
+
+	state := u.checkNow()
+	if state.Status != StatusDownloaded {
+		t.Errorf("status = %q, want %q", state.Status, StatusDownloaded)
+	}
+	if state.LatestVersion != "2.0.0" {
+		t.Errorf("latestVersion = %q, want 2.0.0", state.LatestVersion)
+	}
+	if state.Path != "/tmp/fcc-2.0.0" {
+		t.Errorf("path = %q, want /tmp/fcc-2.0.0", state.Path)
+	}
+}
+
+func TestCheckNowFetchError(t *testing.T) {
+	u := New("1.0.0", 0, 0, 0, 0, 0, 0)
+	u.fetchLatestFunc = func(_ *http.Client) (*Release, error) {
+		return nil, fmt.Errorf("network error")
+	}
+
+	state := u.checkNow()
+	if state.Status != StatusFailed {
+		t.Errorf("status = %q, want %q", state.Status, StatusFailed)
+	}
+	if state.Error != "network error" {
+		t.Errorf("error = %q, want 'network error'", state.Error)
+	}
+}
+
+func TestCheckNowNoAsset(t *testing.T) {
+	u := New("1.0.0", 0, 0, 0, 0, 0, 0)
+	u.fetchLatestFunc = func(_ *http.Client) (*Release, error) {
+		return &Release{TagName: "v2.0.0", Assets: []Asset{}}, nil
+	}
+
+	state := u.checkNow()
+	if state.Status != StatusFailed {
+		t.Errorf("status = %q, want %q", state.Status, StatusFailed)
+	}
+}
+
+func TestCheckNowDownloadError(t *testing.T) {
+	u := New("1.0.0", 0, 0, 0, 0, 0, 0)
+	u.fetchLatestFunc = func(_ *http.Client) (*Release, error) {
+		return &Release{TagName: "v2.0.0", Assets: []Asset{
+			{Name: "fcc-darwin-" + runtime.GOARCH, BrowserDownloadURL: "http://example.com/bin"},
+			{Name: "fcc-darwin-" + runtime.GOARCH + ".sha256", BrowserDownloadURL: "http://example.com/sha"},
+		}}, nil
+	}
+	u.downloadFunc = func(_ *http.Client, _, _, _ string) (string, string, error) {
+		return "", "", fmt.Errorf("download failed")
+	}
+
+	state := u.checkNow()
+	if state.Status != StatusFailed {
+		t.Errorf("status = %q, want %q", state.Status, StatusFailed)
+	}
+	if state.Error != "download failed" {
+		t.Errorf("error = %q, want 'download failed'", state.Error)
+	}
+}
+
+func TestCheckNowPublic(t *testing.T) {
+	// CheckNow creates its own Updater instance; verify it doesn't panic
+	// and returns a valid state. We don't mock the internal fetcher here
+	// because CheckNow is a thin wrapper.
+	state := CheckNow("999.999.999")
+	if state == nil {
+		t.Fatal("CheckNow() returned nil")
+	}
+	if state.CurrentVersion != "999.999.999" {
+		t.Errorf("currentVersion = %q, want 999.999.999", state.CurrentVersion)
 	}
 }
