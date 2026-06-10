@@ -196,10 +196,10 @@ func startFCC() error {
 	// 打开日志文件，把 fcc 的 stderr 重定向过来，方便排查启动失败
 	_ = os.MkdirAll("log", 0755)
 	logFile, err := os.OpenFile("log/fcc-restart.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	needClose := err == nil
 	if err != nil {
 		logFile = os.Stderr
 	}
-	// 注意：此处不关闭 logFile，子进程需要继承这个 fd 写入日志
 
 	// 清理可能残留的 tmux 会话，否则 fcc 启动会因会话已存在而失败
 	if err := exec.Command("tmux", "kill-session", "-t", "fcc").Run(); err != nil {
@@ -219,7 +219,16 @@ func startFCC() error {
 	}
 
 	if err := cmd.Start(); err != nil {
+		if needClose {
+			_ = logFile.Close()
+		}
 		return fmt.Errorf("start fcc failed: %w", err)
+	}
+	// 子进程已通过 dup 继承了自己的 fd，父进程可以安全关闭
+	if needClose {
+		if err := logFile.Close(); err != nil {
+			log.Debugf("[watchdog] close log file: %v", err)
+		}
 	}
 
 	log.Infof("[watchdog] restarted fcc (pid: %d)", cmd.Process.Pid)
